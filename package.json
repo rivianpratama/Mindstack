@@ -1,0 +1,28 @@
+{
+  "name": "mindstack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Eight Sakinorva cognitive-function scores into a personalized psychological profile report (explicitly not a 16-type label).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "tsx watch src/server/index.ts",
+    "build": "vite build",
+    "start": "tsx src/server/index.ts",
+    "test": "vitest run",
+    "build:kb": "node scripts/build-kb.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "hono": "^4.13.4",
+    "openai": "^7.5.0",
+    "wired-elements": "^3.0.0-rc.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}
