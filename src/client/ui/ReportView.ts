@@ -321,6 +321,17 @@ export function createReportView(): ReportView {
 
   const cards = new Map<number, SectionCard>();
   const caret = el('span', 'caret');
+  /**
+   * Steady while tokens arrive, blinking when the stream pauses: blinking
+   * reads as "waiting", steady as "writing" (beautifului.dev). The class lives
+   * on the app-owned caret element, never on generated markup.
+   */
+  let caretIdle = 0;
+  const markStreaming = (): void => {
+    caret.classList.add('is-streaming');
+    clearTimeout(caretIdle);
+    caretIdle = setTimeout(() => caret.classList.remove('is-streaming'), 450) as unknown as number;
+  };
   const splitter = createSectionSplitter();
   /** The lowest card on the page, i.e. where the caret belongs. */
   let tailIndex = -1;
@@ -414,6 +425,14 @@ export function createReportView(): ReportView {
    */
   let elapsedFrom = 0;
   let elapsedTimer = 0;
+  /**
+   * The 04 text-swap carrier holding the shimmer label. It persists across
+   * status changes so the label tweens instead of hard-cutting, and the
+   * elapsed clock element is built exactly once per run.
+   */
+  let labelWrap: HTMLElement | null = null;
+  let labelText = '';
+  let labelSwapTimer = 0;
 
   const stopElapsed = (): void => {
     if (!elapsedTimer) return;
@@ -421,22 +440,65 @@ export function createReportView(): ReportView {
     elapsedTimer = 0;
   };
 
+  const setLabel = (wrap: HTMLElement, text: string): void => {
+    wrap.replaceChildren(shimmerText(text));
+  };
+
   const writeStatus = (text: string | null): void => {
-    statusHost.replaceChildren();
-    stopElapsed();
-    if (text === null) return;
+    // appendThinking repeats the same status per delta; nothing to do.
+    if (text !== null && text === labelText && labelWrap) return;
+
+    if (text === null) {
+      statusHost.replaceChildren();
+      stopElapsed();
+      clearTimeout(labelSwapTimer);
+      labelWrap = null;
+      labelText = '';
+      return;
+    }
 
     if (!elapsedFrom) elapsedFrom = Date.now();
-    const elapsed = el('span', 'status-elapsed');
-    elapsed.setAttribute('aria-hidden', 'true');
-    statusHost.append(shimmerText(text), elapsed);
+    labelText = text;
 
-    const tick = () => {
-      const seconds = Math.round((Date.now() - elapsedFrom) / 1000);
-      elapsed.textContent = seconds >= 1 ? `${seconds}s` : '';
-    };
-    tick();
-    elapsedTimer = setInterval(tick, 1000) as unknown as number;
+    if (!labelWrap) {
+      // First status of the run: build the carrier and the clock once.
+      statusHost.replaceChildren();
+      labelWrap = el('span', 't-text-swap');
+      setLabel(labelWrap, text);
+      const elapsed = el('span', 'status-elapsed');
+      elapsed.setAttribute('aria-hidden', 'true');
+      statusHost.append(labelWrap, elapsed);
+
+      const tick = () => {
+        const seconds = Math.round((Date.now() - elapsedFrom) / 1000);
+        elapsed.textContent = seconds >= 1 ? `${seconds}s` : '';
+      };
+      tick();
+      stopElapsed();
+      elapsedTimer = setInterval(tick, 1000) as unknown as number;
+      return;
+    }
+
+    /*
+     * Vendored 04 text-swap on ONE carrier: exit up-and-blur, replace the
+     * text, enter from below. One label exists at any instant, so the polite
+     * live region announces each status atomically (upstream's two-node swap
+     * would briefly hold both and can announce a run-on string).
+     */
+    const wrap = labelWrap;
+    if (prefersReducedMotion()) {
+      setLabel(wrap, text);
+      return;
+    }
+    clearTimeout(labelSwapTimer);
+    wrap.classList.add('is-exit');
+    labelSwapTimer = setTimeout(() => {
+      setLabel(wrap, labelText);
+      wrap.classList.remove('is-exit');
+      wrap.classList.add('is-enter-start');
+      void wrap.offsetWidth;
+      wrap.classList.remove('is-enter-start');
+    }, motionMs('--text-swap-dur', 150)) as unknown as number;
   };
 
   /**
@@ -466,7 +528,7 @@ export function createReportView(): ReportView {
      * snaps up by the panel's full height in a single frame.
      */
     const ms = motionMs('--toast-close', 250);
-    const ease = 'cubic-bezier(0.22, 1, 0.36, 1)';
+    const ease = 'var(--ease-smooth-out)';
     thinkingHost.style.blockSize = `${thinkingHost.offsetHeight}px`;
     thinkingHost.style.overflow = 'hidden';
     panel.classList.remove('is-open');
@@ -488,7 +550,16 @@ export function createReportView(): ReportView {
     head.appendChild(el('span', undefined, title));
     const dismiss = el('button', 'dismiss', 'Dismiss');
     dismiss.setAttribute('type', 'button');
-    dismiss.addEventListener('click', () => box.remove());
+    dismiss.addEventListener('click', () => {
+      // The one dismissible element gets a real exit: the same toast-close
+      // tween it entered with, instead of a single-frame removal.
+      if (prefersReducedMotion()) {
+        box.remove();
+        return;
+      }
+      box.classList.remove('is-open');
+      setTimeout(() => box.remove(), motionMs('--toast-close', 250) + 30);
+    });
     head.appendChild(dismiss);
     box.appendChild(head);
     return box;
@@ -533,10 +604,13 @@ export function createReportView(): ReportView {
       }
       splitter.push(text);
       schedule();
+      markStreaming();
     },
 
     finish() {
       streaming = false;
+      clearTimeout(caretIdle);
+      caret.classList.remove('is-streaming');
       thinking?.flush();
       splitter.end();
       paint();
@@ -641,6 +715,7 @@ export function createReportView(): ReportView {
       errorCard = card;
       banners.appendChild(card);
       streaming = false;
+      clearTimeout(caretIdle);
       caret.remove();
     },
   };

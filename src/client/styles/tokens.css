@@ -75,6 +75,14 @@
   --calm-bg: color-mix(in oklab, var(--calm) 12%, var(--card));
   --alarm-bg: color-mix(in oklab, var(--alarm) 12%, var(--card));
 
+  /*
+   * The invalid-field focus halo. 25% reads on white; the dark blocks re-declare
+   * it at 40% because a light red's halo on near-black barely reads at 25% -
+   * the same alpha reasoning as --shadow-*, and shadcn's own /20 -> dark /40
+   * split on aria-invalid rings.
+   */
+  --alarm-ring: color-mix(in oklab, var(--alarm) 25%, transparent);
+
   /* Vertical rhythm: the old .stack-flow 18px, tokenised. */
   --space-flow: 1.125rem;
 
@@ -101,6 +109,16 @@
   :root:not([data-theme='light']) {
     color-scheme: dark;
 
+    /*
+     * Five deviations from shadcn's dark neutrals, all legibility (upstream
+     * value in parens): --popover 0.269 (0.205) separates the dialog from the
+     * 0.205 card it covers; --accent 0.371 (0.269) keeps hover readable against
+     * --secondary/--muted at 0.269; --border 12% (10%) keeps hairlines alive on
+     * 0.205 cards; --input 35% (15%) and --ring 0.708 (0.556) are the same
+     * WCAG 1.4.11 reasoning as the light block - the ring pair is exactly
+     * upstream's swapped, so the ring is always the lighter of ring/background.
+     * Full upstream diff-base: docs/design/shadcn.md.
+     */
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.205 0 0);
@@ -129,6 +147,7 @@
     --warn-bg: color-mix(in oklab, var(--warn) 14%, var(--card));
     --calm-bg: color-mix(in oklab, var(--calm) 14%, var(--card));
     --alarm-bg: color-mix(in oklab, var(--alarm) 14%, var(--card));
+    --alarm-ring: color-mix(in oklab, var(--alarm) 40%, transparent);
 
     --shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.3);
     --shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 0.35), 0 1px 2px -1px oklch(0 0 0 / 0.35);
@@ -167,6 +186,7 @@
   --warn-bg: color-mix(in oklab, var(--warn) 14%, var(--card));
   --calm-bg: color-mix(in oklab, var(--calm) 14%, var(--card));
   --alarm-bg: color-mix(in oklab, var(--alarm) 14%, var(--card));
+  --alarm-ring: color-mix(in oklab, var(--alarm) 40%, transparent);
 
   --shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.3);
   --shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 0.35), 0 1px 2px -1px oklch(0 0 0 / 0.35);

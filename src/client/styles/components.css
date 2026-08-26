@@ -104,6 +104,8 @@
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.35;
+  /* Headings balance; body copy stays text-wrap: pretty. */
+  text-wrap: balance;
 }
 .card-sub {
   margin: 0.375rem 0 1rem;
@@ -325,22 +327,31 @@
  * the halo + border is the more visible treatment here, not the less. Plain
  * :focus, not :focus-visible: a text field's focus is always visible focus,
  * and the modality heuristic would drop the ring after a mouse click.
+ * The ring arrives at 0ms - tabbing through eight fields is keyboard-repeated,
+ * and keyboard-initiated changes get no motion - while blur still tweens out
+ * on the base rule's 150ms.
  */
 .input:focus {
   outline: none;
   border-color: var(--ring);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent);
+  transition-duration: 0s;
 }
 
+/*
+ * Invalid state, shadcn's split: the wrapper class styles the block (label),
+ * the ARIA attribute styles the control - so the pixels and the assistive-tech
+ * signal ride the same switch and cannot drift.
+ */
 .field.invalid .field-label {
   color: var(--alarm);
 }
-.field.invalid .input {
+.input[aria-invalid='true'] {
   border-color: var(--alarm);
 }
-.field.invalid .input:focus {
+.input[aria-invalid='true']:focus {
   border-color: var(--alarm);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--alarm) 25%, transparent);
+  box-shadow: 0 0 0 3px var(--alarm-ring);
 }
 
 .form-actions {
@@ -407,6 +418,10 @@
 .btn-primary {
   background: var(--primary);
   color: var(--primary-foreground);
+  /* Holds the box through the busy swap ('Generate my report' <-> 'Working…'):
+     a loading state must never resize the control under the pointer. Sized to
+     the wider label; re-measure if the label copy changes. */
+  min-inline-size: 10.75rem;
 }
 /* Hover shifts the surface toward the page instead of fading the whole button,
    so the label holds its contrast. */
@@ -447,6 +462,31 @@
 .example-link:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/*
+ * Touch reach. Every control clears an effective 44px target on touch devices
+ * via an invisible hit overlay - visual size unchanged. Hand-ported from
+ * reui.io's extend-touch-target recipe; a hand port must state content: ''
+ * (Tailwind's after: variant injects it implicitly). Insets are tuned so
+ * adjacent controls in .form-actions (14px apart) never overlap.
+ */
+@media (pointer: coarse) {
+  .btn,
+  .dismiss,
+  .example-link,
+  .input-card .t-acc-head {
+    position: relative;
+    touch-action: manipulation;
+  }
+  .btn::after,
+  .dismiss::after,
+  .example-link::after,
+  .input-card .t-acc-head::after {
+    content: '';
+    position: absolute;
+    inset: -0.375rem;
+  }
 }
 
 /* --- the compact tier strip ---------------------------------------------- */
@@ -614,6 +654,10 @@
   line-height: 1.55;
   color: var(--muted-foreground);
 }
+/* The coin-toss caveat speaks in the same hedging voice as the murmur. */
+.band-note.tie {
+  font-style: italic;
+}
 
 .sig-block + .sig-block {
   margin-block-start: 1.75rem;
@@ -741,6 +785,7 @@
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.35;
+  text-wrap: balance;
 }
 
 .banner {

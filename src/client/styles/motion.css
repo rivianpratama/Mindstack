@@ -1,8 +1,14 @@
 /*
- * Motion, vendored from transitions.dev (github.com/Jakubantalik/transitions.dev).
+ * Motion, vendored from transitions.dev (MIT via the npm package
+ * `transitions-pro`; upstream inventory and deviation record in
+ * docs/design/transitions-dev.md).
  *
- * Upstream ships ~200 tokens for 32 transitions; six of them fit this app, so
- * only those are here. Two deliberate deviations from upstream:
+ * Upstream ships ~200 tokens for 32 transitions; seven of them fit this app.
+ * Six live here in full; the seventh (29 reasoning stream) is split - its
+ * tokens stay below because motionMs() reads --murmur-pace, but its rules
+ * diverged far enough from upstream (content-driven height, bottom-anchored
+ * mask, word pacing) that they live with the component in components.css.
+ * Deliberate deviations from upstream:
  *
  *   - The shimmer/thinking colours are bound to theme tokens instead of the
  *     hard-coded #7c7c7c / #0d0d0d, which would be invisible on a dark card.
@@ -10,6 +16,10 @@
  *     them into a blanket `* { transition: none }` - the dialog's .is-open
  *     gating and the accordion's settle promise both sequence on transitions
  *     completing, and a blanket rule breaks them.
+ *   - Review constants for anything added here (from ui-skills
+ *     fixing-motion-performance): blur animation <= 8px, one-shot, never
+ *     continuous, never on large surfaces; will-change only around an active
+ *     animation; durations < 300ms unless justified in an adjacent comment.
  */
 
 :root {
@@ -36,13 +46,25 @@
   --modal-scale: 0.96;
   --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
 
-  /* 22 toast open / close */
-  --toast-open: 350ms;
+  /* 22 toast open / close. --toast-open deviates from upstream's 350ms:
+     .t-toast is the entrance for every report section, banner, the tier strip
+     and the signature card - the most-repeated consciously-watched animation
+     in the app - so it sits on the same 250ms clock as --toast-close/--acc-*
+     and under the 300ms budget (CLAUDE.md). */
+  --toast-open: 250ms;
   --toast-close: 250ms;
   --toast-distance: 16px;
   --toast-blur: 2px;
   --toast-scale: 0.97;
   --toast-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 04 text states swap - the status label's thinking -> writing handover.
+     150ms matches --duration-quick; upstream's ease-in-out is kept because the
+     swap is symmetric by design (exit and enter share one clock). */
+  --text-swap-dur: 150ms;
+  --text-swap-translate-y: 4px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-in-out;
 
   /* 12 error state shake */
   --shake-distance: 6px;
@@ -50,7 +72,7 @@
   --shake-dur-a: 80ms;
   --shake-dur-b: 60ms;
   --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --revert-dur: 280ms;
+  /* upstream's --revert-dur removed with the dead .t-input.is-error state */
 
   /* The murmur: drifting reasoning window (29 reasoning stream, mask only) */
   --murmur-fade: 34px;
@@ -164,6 +186,10 @@
   transition:
     transform var(--modal-open-dur) var(--modal-ease),
     opacity var(--modal-open-dur) var(--modal-ease);
+  /* Deviation from upstream's "do not strip will-change": the settled state
+     releases the layer. Pre-promotion still covers the entrance, and removing
+     .is-open re-arms the hint before any exit tween. */
+  will-change: auto;
 }
 .t-modal::backdrop {
   background: oklch(0 0 0 / 0.45);
@@ -203,6 +229,11 @@
     opacity var(--toast-open) var(--toast-ease),
     transform var(--toast-open) var(--toast-ease),
     filter var(--toast-open) var(--toast-ease);
+  /* Deviation from upstream's "do not strip will-change": upstream assumes
+     transient toasts, but .t-toast here sits on ~10 session-long cards - left
+     alone that is ten permanently promoted GPU layers with a filter hint. The
+     settled state releases them; removing .is-open re-arms before any exit. */
+  will-change: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -214,16 +245,53 @@
   }
 }
 
+/* --- 04 text states swap -------------------------------------------------- */
+
+/*
+ * One label carrier: exit up-and-blur, swap the text, enter from below. The
+ * deviation from upstream (which appends a SECOND node and removes the old one
+ * after the swap) is deliberate: the status line is an aria-live region, and
+ * two coexisting labels can be announced as a run-on string. One carrier means
+ * the region atomically holds exactly one label at all times.
+ */
+.t-text-swap {
+  display: inline-block;
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+  transition:
+    transform var(--text-swap-dur) var(--text-swap-ease),
+    filter var(--text-swap-dur) var(--text-swap-ease),
+    opacity var(--text-swap-dur) var(--text-swap-ease);
+  will-change: transform, filter, opacity;
+}
+.t-text-swap.is-exit {
+  transform: translateY(calc(var(--text-swap-translate-y) * -1));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+}
+.t-text-swap.is-enter-start {
+  transform: translateY(var(--text-swap-translate-y));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-text-swap {
+    transition: none !important;
+  }
+}
+
 /* --- 12 error state shake ------------------------------------------------ */
 
 /* This rule owns only the interpolation; the border colours themselves live in
    components.css. Border width stays constant across states so the tween never
-   shifts inner content. Cumulative %-stops for 80+60+80+60 = 280ms. */
+   shifts inner content. Cumulative %-stops for 80+60+80+60 = 280ms.
+   Deviation: upstream's .t-input.is-error state was removed as dead - the real
+   error treatment is .input[aria-invalid='true'] in components.css, and the
+   shake deliberately targets the .form-errors summary, not the input. */
 .t-input {
   transition: border-color 150ms ease-out;
-}
-.t-input.is-error {
-  transition: border-color var(--revert-dur) ease-out;
 }
 .t-shake {
   animation: t-input-shake calc(var(--shake-dur-a) * 2 + var(--shake-dur-b) * 2) linear;

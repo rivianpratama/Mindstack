@@ -140,7 +140,6 @@ export function confirmOutOfRange(
     const settle = (choice: ConfirmChoice): void => {
       if (settled) return;
       settled = true;
-      dialog.remove();
       resolve(choice);
     };
 
@@ -148,10 +147,21 @@ export function confirmOutOfRange(
     const closeWith = (value: string): void => {
       if (closing) return;
       closing = true;
+      const choice: ConfirmChoice = value === 'confirm' ? 'confirm' : 'edit';
+      /*
+       * Confirm resolves NOW: the exit tween is presentation only, and the
+       * caller awaits this promise before starting the run - holding it to the
+       * end of the animation would insert ~220ms between "Confirm" and the
+       * network call. Edit resolves only after close(): while a modal is open
+       * the browser blocks focus from moving outside it, so the caller's
+       * focusField() would silently fail if resolved early.
+       */
+      if (choice === 'confirm') settle(choice);
       dialog.classList.remove('is-open');
       const finish = (): void => {
         if (dialog.open) dialog.close(value);
-        settle(value === 'confirm' ? 'confirm' : 'edit');
+        dialog.remove();
+        settle(choice);
       };
       if (prefersReducedMotion()) finish();
       else setTimeout(finish, motionMs('--modal-close-dur', 200) + 20);
@@ -183,6 +193,7 @@ export function confirmOutOfRange(
     // Fallback only: settle() has usually run by the time this fires.
     dialog.addEventListener('close', () => {
       settle(dialog.returnValue === 'confirm' ? 'confirm' : 'edit');
+      dialog.remove();
     });
 
     document.body.appendChild(dialog);

@@ -121,6 +121,17 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
   /** No report exists before the first collapse, so nothing can be stale yet. */
   let hasCollapsedOnce = false;
 
+  /*
+   * A real <form>, so Enter in any field submits and the enterkeyhint="go" on
+   * the last field is a promise the browser can actually keep. Submission is
+   * intercepted; the page never navigates.
+   */
+  const scoreForm = el('form');
+  scoreForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    onSubmit();
+  });
+
   for (const axis of AXIS_KEYS) {
     const group = el('div', 'axis-group');
     group.appendChild(el('h3', undefined, AXIS_LABELS[axis]));
@@ -157,6 +168,8 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
       });
       input.addEventListener('input', () => {
         wrap.classList.remove('invalid');
+        input.removeAttribute('aria-invalid');
+        input.removeAttribute('aria-describedby');
         if (hasCollapsedOnce) api.setStale(true);
       });
       wrap.appendChild(input);
@@ -166,26 +179,27 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
       fields.appendChild(wrap);
     }
     group.appendChild(fields);
-    panel.appendChild(group);
+    scoreForm.appendChild(group);
   }
 
   /* ---- actions ---- */
 
   const errors = el('div', 'form-errors');
+  errors.id = 'form-errors';
   errors.hidden = true;
   errors.setAttribute('role', 'alert');
 
   const actions = el('div', 'form-actions');
   const submit = el('button', 'btn btn-primary', 'Generate my report');
-  submit.type = 'button';
-  submit.addEventListener('click', () => onSubmit());
+  submit.type = 'submit';
   actions.appendChild(submit);
 
   const example = el('button', 'example-link', 'fill example (Profile A)');
   example.type = 'button';
   actions.appendChild(example);
 
-  panel.appendChild(actions);
+  scoreForm.appendChild(actions);
+  panel.appendChild(scoreForm);
   panel.appendChild(
     el('p', 'stale-note', 'Edited. Generate again to update the report below.'),
   );
@@ -216,8 +230,21 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
     },
 
     markInvalid(fns: readonly FunctionKey[]) {
-      for (const wrap of fieldWraps.values()) wrap.classList.remove('invalid');
-      for (const fn of fns) fieldWraps.get(fn)?.classList.add('invalid');
+      for (const [fn, wrap] of fieldWraps) {
+        wrap.classList.remove('invalid');
+        scoreInputs.get(fn)?.removeAttribute('aria-invalid');
+        scoreInputs.get(fn)?.removeAttribute('aria-describedby');
+      }
+      for (const fn of fns) {
+        // shadcn's split: the wrapper class styles the block (label), while
+        // aria-invalid on the control drives BOTH the border/halo CSS and the
+        // assistive-tech signal, so pixels and announcement cannot drift.
+        // aria-describedby links back to the role="alert" error list.
+        fieldWraps.get(fn)?.classList.add('invalid');
+        const input = scoreInputs.get(fn);
+        input?.setAttribute('aria-invalid', 'true');
+        input?.setAttribute('aria-describedby', 'form-errors');
+      }
     },
 
     showErrors(messages: readonly string[]) {
