@@ -100,6 +100,11 @@ settled items. Hard invariants and the motion budget live in CLAUDE.md — read 
   atomic.
 - **Tooltip**: native `title` only, and only for redundant information (see decisions ledger);
   building a tooltip primitive requires removing that redundancy first.
+- **Segmented control** (report language): a native radio pair inside `fieldset`+`legend` —
+  state IS `:checked`, captions paint via `input:checked + .lang-opt-label`; selection swaps at
+  0ms (keyboard-driven); focus ring repainted on the caption (`input:focus-visible + label`,
+  same 2px `--ring`/2px offset as base.css); on `pointer: coarse` the invisible input grows
+  vertically only (a four-sided overlay would overlap the adjacent segment).
 
 ## Already-pass ledger (evidence-cited; do not re-raise)
 

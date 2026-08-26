@@ -43,6 +43,15 @@ import {
 } from '../kb/loader';
 import { MAX_COMPLETION_TOKENS } from '../deepseek';
 import { fullSystemPrompt } from './foundations';
+import {
+  buildHonestNullReportId,
+  DEFAULT_REPORT_LANGUAGE,
+  disclaimerFor,
+  headingsFor,
+  languageDirective,
+  REPORT_HEADINGS_EN,
+  type ReportLanguage,
+} from './language';
 
 // Extra completion tokens reserved for the model's hidden reasoning pass (thinking is on
 // by default). Billed against the same max_tokens as the report, so it is added on top of
@@ -153,6 +162,8 @@ export interface SelectedFragment {
 
 export interface Assembly {
   regime: Regime;
+  /** The language the report is written in ('en' default; 'id' = Bahasa Indonesia). */
+  language: ReportLanguage;
   /** False only for FLAT: the honest-null report is deterministic, no model involved. */
   llm: boolean;
   honestNull: boolean;
@@ -396,17 +407,11 @@ const ESCALATION_OVERLAY: readonly string[] = [
 ];
 
 /**
- * The six headings the client's cards are keyed to, in order. Exact strings: the client
- * matches on them. Sections 2-7 of the report; section 1 is code-rendered.
+ * The six English headings the client's cards are keyed to, in order. Exact strings: the
+ * client matches on them. Sections 2-7 of the report; section 1 is code-rendered. The
+ * canonical definition (with its Indonesian counterpart) lives in ./language.ts.
  */
-export const REPORT_HEADINGS = [
-  '## How your mind tends to work',
-  '## How you handle different situations',
-  '## When things get stressful',
-  '## Things you can try',
-  '## Where this report comes from',
-  "## What this report can't tell you",
-] as const;
+export const REPORT_HEADINGS = REPORT_HEADINGS_EN;
 
 /**
  * Appended to every full-length feature. Implements the two halves of the length rule:
@@ -638,15 +643,19 @@ export function assemblePrompt(
    * nothing about the output.
    */
   _context?: ContextAnswers | null,
+  /** The language the generated report is written in. Instructions stay English. */
+  language: ReportLanguage = DEFAULT_REPORT_LANGUAGE,
 ): Assembly {
 
   if (signature.regime === 'FLAT') {
     // Table row 1: no LLM call at all. Nothing is selected, nothing is planned.
     return {
       regime: 'FLAT',
+      language,
       llm: false,
       honestNull: true,
-      honestNullReport: buildHonestNullReport(signature),
+      honestNullReport:
+        language === 'id' ? buildHonestNullReportId(signature) : buildHonestNullReport(signature),
       fragmentKeys: [],
       fragments: [],
       renderPlan: [],
@@ -773,6 +782,7 @@ export function assemblePrompt(
 
   return {
     regime: signature.regime,
+    language,
     llm: true,
     honestNull: false,
     honestNullReport: null,
@@ -788,6 +798,7 @@ export function assemblePrompt(
       fragments,
       budgetWords,
       minWords,
+      language,
     }),
     // Output budget (~2.2 tokens/word + slack) PLUS a reasoning allowance: thinking is on
     // by default and its tokens are billed against the same max_tokens, so a cap sized for
@@ -1551,6 +1562,7 @@ interface UserPromptInput {
   fragments: SelectedFragment[];
   budgetWords: number;
   minWords: number;
+  language: ReportLanguage;
 }
 
 const GROUP_TITLES: Record<SelectedFragment['group'], string> = {
@@ -1563,7 +1575,7 @@ const GROUP_TITLES: Record<SelectedFragment['group'], string> = {
 
 function buildUserPrompt(input: UserPromptInput): string {
   const { signature, scenarios, renderPlan, fragments } = input;
-  const { budgetWords, minWords } = input;
+  const { budgetWords, minWords, language } = input;
   const out: string[] = [];
 
   out.push('# 1. STACK SIGNATURE (computed, authoritative)');
@@ -1698,13 +1710,15 @@ function buildUserPrompt(input: UserPromptInput): string {
 
   out.push('# 5. RENDER INSTRUCTION');
   out.push('');
+  for (const line of languageDirective(language)) out.push(line);
+  out.push('');
   out.push(
     'Write Sections 2–7 ONLY. Section 1 is rendered client-side from the Signature above; ' +
       'do not restate it. Use EXACTLY these markdown headings, in this order, with nothing ' +
       'before the first one (the client matches these strings to render its cards):',
   );
   out.push('');
-  for (const heading of REPORT_HEADINGS) out.push(`- \`${heading}\``);
+  for (const heading of headingsFor(language)) out.push(`- \`${heading}\``);
   out.push('');
   out.push(
     'Obey the render plan\'s ordering, modes and word budgets. Ground every paragraph in a ' +
@@ -1715,7 +1729,7 @@ function buildUserPrompt(input: UserPromptInput): string {
       'disclaimer block, reproduced verbatim as a markdown blockquote, and write nothing after it:',
   );
   out.push('');
-  out.push(`> ${getDisclaimer()}`);
+  out.push(`> ${disclaimerFor(language)}`);
   out.push('');
 
   return out.join('\n');

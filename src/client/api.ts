@@ -8,7 +8,7 @@
  * fixture (test/client.sse.test.ts).
  *
  * Contract (fixed; the server is built against the same one):
- *   request  POST /api/generate  { scores }
+ *   request  POST /api/generate  { scores, language? }
  *   response text/event-stream
  *              event: meta   data: {"regime":"NORMAL","llm":true}
  *              event: chunk  data: {"text":"..."}            (repeated)
@@ -19,18 +19,21 @@
  */
 
 import type { FunctionKey, Scores } from '../shared/geometry/types';
+import type { ReportLanguage } from '../shared/language';
 
 /* ------------------------------------------------------------------ *
  * Request / event payloads
  * ------------------------------------------------------------------ */
 
 /**
- * The whole request. Eight scores, nothing else: the report's situational
- * material is generated server-side from the geometry, so there is nothing for
- * the person to fill in and nothing else to send.
+ * The whole request. Eight scores plus the report language: the report's
+ * situational material is generated server-side from the geometry, so there is
+ * nothing for the person to fill in and nothing else to send.
  */
 export interface GenerateRequest {
   scores: Scores;
+  /** Language the report is written in. Omitted = English (the server default). */
+  language?: ReportLanguage;
 }
 
 export interface MetaPayload {

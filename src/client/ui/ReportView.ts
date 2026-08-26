@@ -41,7 +41,28 @@ export const SECTION_TITLES: readonly string[] = [
   "What this report can't tell you",
 ];
 
-const HEADINGS = SECTION_TITLES.map((title) => `## ${title}`);
+/**
+ * The Indonesian counterparts, same order: a report requested with
+ * language 'id' arrives under these headings instead. Kept in step with the
+ * server's REPORT_HEADINGS_ID (src/server/prompt/language.ts) by test.
+ */
+export const SECTION_TITLES_ID: readonly string[] = [
+  'Cara pikiranmu biasanya bekerja',
+  'Cara kamu menghadapi berbagai situasi',
+  'Saat keadaan penuh tekanan',
+  'Hal yang bisa kamu coba',
+  'Dari mana laporan ini berasal',
+  'Apa yang tidak bisa dikatakan laporan ini',
+];
+
+/**
+ * One report streams in one language, but the splitter matches both sets: the
+ * language is the server's business, and a matcher keyed to the request state
+ * would just be one more thing to desync.
+ */
+const ALL_SECTION_TITLES: readonly string[] = [...SECTION_TITLES, ...SECTION_TITLES_ID];
+
+const HEADINGS = ALL_SECTION_TITLES.map((title) => `## ${title}`);
 
 /**
  * A heading line, canonicalised. Tolerates trailing space, extra hashes and a
@@ -56,7 +77,7 @@ export function matchSectionTitle(line: string): string | null {
     .replace(/\s*#+$/, '')
     .trim()
     .toLowerCase();
-  return SECTION_TITLES.find((title) => title.toLowerCase() === text) ?? null;
+  return ALL_SECTION_TITLES.find((title) => title.toLowerCase() === text) ?? null;
 }
 
 /**

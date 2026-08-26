@@ -13,6 +13,11 @@
  */
 
 import { AXIS_KEYS, AXIS_MEMBERS, type AxisKey, type FunctionKey } from '../../shared/geometry/types';
+import {
+  DEFAULT_REPORT_LANGUAGE,
+  isReportLanguage,
+  type ReportLanguage,
+} from '../../shared/language';
 import type { RawScores } from '../api';
 import { createAccordion } from './accordion';
 import { attrs, el } from './dom';
@@ -52,6 +57,8 @@ export interface InputFormApi {
   element: HTMLElement;
   /** Raw, untouched strings - parsing and range checks belong to validation. */
   readScores(): RawScores;
+  /** The selected report language. Falls back to English if the DOM is in a weird state. */
+  readLanguage(): ReportLanguage;
   setBusy(busy: boolean): void;
   markInvalid(fns: readonly FunctionKey[]): void;
   showErrors(messages: readonly string[]): void;
@@ -182,6 +189,37 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
     scoreForm.appendChild(group);
   }
 
+  /* ---- report language ---- */
+
+  /*
+   * A native radio group dressed as a segmented control: two options is the
+   * whole space, so a select would hide one behind a click. The inputs stay in
+   * the DOM (visually covered by their caption) so arrow keys, form semantics
+   * and screen readers get the standard radio-group pattern for free; state is
+   * the native :checked, no bespoke class.
+   */
+  const langInputs: HTMLInputElement[] = [];
+  const langGroup = el('fieldset', 'lang-group');
+  langGroup.appendChild(el('legend', 'lang-legend', 'Report language'));
+  const langSeg = el('div', 'lang-seg');
+  const addLanguage = (value: ReportLanguage, caption: string): void => {
+    const option = el('label', 'lang-opt');
+    const input = el('input');
+    attrs(input, { type: 'radio', name: 'report-language', value });
+    input.checked = value === DEFAULT_REPORT_LANGUAGE;
+    input.addEventListener('change', () => {
+      // A different language means the report on screen no longer matches.
+      if (hasCollapsedOnce) api.setStale(true);
+    });
+    option.append(input, el('span', 'lang-opt-label', caption));
+    langSeg.appendChild(option);
+    langInputs.push(input);
+  };
+  addLanguage('en', 'English');
+  addLanguage('id', 'Bahasa Indonesia');
+  langGroup.appendChild(langSeg);
+  scoreForm.appendChild(langGroup);
+
   /* ---- actions ---- */
 
   const errors = el('div', 'form-errors');
@@ -212,6 +250,11 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
       const raw: RawScores = {};
       for (const [fn, input] of scoreInputs) raw[fn] = input.value.trim();
       return raw;
+    },
+
+    readLanguage(): ReportLanguage {
+      const checked = langInputs.find((input) => input.checked);
+      return checked && isReportLanguage(checked.value) ? checked.value : DEFAULT_REPORT_LANGUAGE;
     },
 
     setBusy(busy: boolean) {

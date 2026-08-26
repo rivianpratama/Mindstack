@@ -445,6 +445,86 @@
   }
 }
 
+/* --- the report-language picker ------------------------------------------ */
+
+/*
+ * A native radio pair dressed as a segmented control: two options is the whole
+ * space, so both stay visible. The input is stretched invisibly over its own
+ * caption but stays real - :checked IS the state (no bespoke class), arrow keys
+ * move the selection, and the caption paints from the sibling combinator so the
+ * pixels and the assistive-tech signal ride the same switch.
+ */
+.lang-group {
+  margin: 1.125rem 0 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+.lang-legend {
+  padding: 0;
+  margin-block-end: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+}
+.lang-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+}
+.lang-opt {
+  position: relative;
+  display: inline-flex;
+}
+.lang-opt input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.lang-opt-label {
+  padding: 0.3125rem 0.75rem;
+  border-radius: calc(var(--radius) - 4px);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--muted-foreground);
+}
+/* Selection swaps instantly on purpose: it is often keyboard-driven (arrow
+   keys), and keyboard-initiated state changes get 0ms. */
+.lang-opt input:checked + .lang-opt-label {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: var(--shadow-xs);
+}
+.lang-opt input:hover:not(:checked) + .lang-opt-label {
+  color: var(--foreground);
+}
+/* The global :focus-visible ring cannot show on an invisible input, so it is
+   repainted onto the caption, same colour and offset as base.css. */
+.lang-opt input:focus-visible + .lang-opt-label {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* Touch reach to ~44px: taller captions, plus the invisible input (the real hit
+   target) grows VERTICALLY only - the segments sit 2px apart horizontally, so a
+   four-sided overlay would overlap its neighbour and mis-route taps. */
+@media (pointer: coarse) {
+  .lang-opt-label {
+    padding-block: 0.5rem;
+  }
+  .lang-opt input {
+    inset: -0.375rem 0;
+    touch-action: manipulation;
+  }
+}
+
 .example-link {
   padding: 0;
   background: none;

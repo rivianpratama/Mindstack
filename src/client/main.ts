@@ -11,6 +11,7 @@
 import { computeSignature } from '../shared/geometry';
 import { validateScores } from '../shared/validation';
 import type { Scores } from '../shared/geometry/types';
+import type { ReportLanguage } from '../shared/language';
 import { generateReport, type GenerateRequest } from './api';
 import { createInputForm } from './ui/InputForm';
 import { createSignatureView, createTierStrip } from './ui/SignatureView';
@@ -75,10 +76,10 @@ async function submit(): Promise<void> {
     form.markInvalid([]);
   }
 
-  await run(result.scores);
+  await run(result.scores, form.readLanguage());
 }
 
-async function run(scores: Scores): Promise<void> {
+async function run(scores: Scores, language: ReportLanguage): Promise<void> {
   running = true;
   /*
    * Dismiss the on-screen keyboard before anything moves. Otherwise the
@@ -148,7 +149,9 @@ async function run(scores: Scores): Promise<void> {
     outputSlot.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
-  const request: GenerateRequest = { scores };
+  // The language is captured by value alongside the scores: retries reuse it,
+  // and editing the form mid-run desyncs nothing (the stale note keeps it honest).
+  const request: GenerateRequest = { scores, language };
   let failed = false;
 
   /*
@@ -181,7 +184,7 @@ async function run(scores: Scores): Promise<void> {
       // The error card first, so the reason is on screen before anything else;
       // finish() then flushes whatever prose did arrive before the failure.
       report.showError(error.message, () => {
-        void run(scores);
+        void run(scores, language);
       });
       report.finish();
       revealSignature();

@@ -25,6 +25,11 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 
 import { computeSignature } from '../../shared/geometry';
+import {
+  DEFAULT_REPORT_LANGUAGE,
+  isReportLanguage,
+  type ReportLanguage,
+} from '../../shared/language';
 import { validateScores } from '../../shared/validation';
 import { assemblePrompt } from '../prompt/assemble';
 import { auditReport, ensureDisclaimer } from '../guards';
@@ -33,6 +38,7 @@ import { isConfigured, streamReport } from '../deepseek';
 interface GenerateBody {
   scores?: unknown;
   context?: unknown;
+  language?: unknown;
 }
 
 export const generateRoute = new Hono();
@@ -42,7 +48,10 @@ generateRoute.post('/generate', async (c) => {
   try {
     body = (await c.req.json()) as GenerateBody;
   } catch {
-    return c.json({ error: 'Request body must be JSON: { "scores": {...}, "context": {...}|null }' }, 400);
+    return c.json(
+      { error: 'Request body must be JSON: { "scores": {...}, "language": "en"|"id"|undefined }' },
+      400,
+    );
   }
 
   const validation = validateScores(body?.scores);
@@ -60,13 +69,29 @@ generateRoute.post('/generate', async (c) => {
     );
   }
 
+  /*
+   * The report language. Absent means English (the wire contract predates the field);
+   * present-but-unknown is a 400, because silently writing the wrong language would be
+   * worse than an error.
+   */
+  let language: ReportLanguage = DEFAULT_REPORT_LANGUAGE;
+  if (body.language !== undefined && body.language !== null) {
+    if (!isReportLanguage(body.language)) {
+      return c.json(
+        { error: 'The "language" field must be "en" (English) or "id" (Bahasa Indonesia).' },
+        400,
+      );
+    }
+    language = body.language;
+  }
+
   const signature = computeSignature(validation.scores);
   /*
    * `context` is accepted for wire compatibility and then ignored. The report generates its
    * own situational scenarios from the taxonomy and this profile's supply grades, so there is no
    * reader-supplied situation to read any more.
    */
-  const assembly = assemblePrompt(signature);
+  const assembly = assemblePrompt(signature, null, language);
 
   return streamSSE(c, async (stream) => {
     await stream.writeSSE({
@@ -83,7 +108,7 @@ generateRoute.post('/generate', async (c) => {
       }
       await stream.writeSSE({
         event: 'audit',
-        data: JSON.stringify({ violations: auditReport(text) }),
+        data: JSON.stringify({ violations: auditReport(text, language) }),
       });
       await stream.writeSSE({ event: 'done', data: '{}' });
       return;
@@ -135,8 +160,8 @@ generateRoute.post('/generate', async (c) => {
      * disclaimer is reported as the violation it is, and the repair is then streamed as
      * a final chunk, because a report without the §5.6 block is a hard fail.
      */
-    const violations = auditReport(buffered);
-    const guarded = ensureDisclaimer(buffered);
+    const violations = auditReport(buffered, language);
+    const guarded = ensureDisclaimer(buffered, language);
     if (guarded !== buffered) {
       await stream.writeSSE({
         event: 'chunk',

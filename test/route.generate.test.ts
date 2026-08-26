@@ -36,11 +36,14 @@ interface Frame {
   data: string;
 }
 
-async function post(scores: Record<string, number>): Promise<Frame[]> {
+async function post(
+  scores: Record<string, number>,
+  extra: Record<string, unknown> = {},
+): Promise<Frame[]> {
   const res = await generateRoute.request('/generate', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ scores }),
+    body: JSON.stringify({ scores, ...extra }),
   });
   const raw = await res.text();
   return raw
@@ -167,5 +170,63 @@ describe('POST /api/generate — thinking + content streaming', () => {
     expect(JSON.parse(error!.data).message).toContain('no report text');
     expect(events).not.toContain('audit');
     expect(events).not.toContain('done');
+  });
+});
+
+describe('POST /api/generate — report language', () => {
+  it('rejects an unknown language with a 400 instead of writing the wrong one', async () => {
+    const res = await generateRoute.request('/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scores: PROFILE_A, language: 'fr' }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('"language"');
+  });
+
+  it('accepts an explicit "en" and behaves exactly like the default', async () => {
+    control.items = [
+      { kind: 'content', text: withDisclaimer('## How your processing runs\n\nWorth testing.') },
+    ];
+    const frames = await post(PROFILE_A, { language: 'en' });
+    expect(frames.map((f) => f.event).at(-1)).toBe('done');
+    expect(JSON.parse(frames.find((f) => f.event === 'audit')!.data)).toEqual({ violations: [] });
+  });
+
+  it('appends the INDONESIAN disclaimer when an Indonesian report omits it', async () => {
+    control.items = [
+      { kind: 'content', text: '## Cara pikiranmu biasanya bekerja\n\nLayak diuji.' },
+    ];
+    const frames = await post(PROFILE_A, { language: 'id' });
+    const chunkText = frames
+      .filter((f) => f.event === 'chunk')
+      .map((f) => JSON.parse(f.data).text as string)
+      .join('');
+    expect(chunkText).toContain('Apa ini dan apa yang bukan.');
+    // Zero cross-language contamination: no English block on the Indonesian path.
+    expect(chunkText).not.toContain('What this is and is not.');
+    const violations = JSON.parse(frames.find((f) => f.event === 'audit')!.data).violations;
+    expect(violations.join(' ')).toMatch(/disclaimer/i);
+  });
+
+  it('accepts an Indonesian report that already carries its own disclaimer', async () => {
+    const { DISCLAIMER_ID } = await import('../src/server/prompt/language');
+    control.items = [
+      {
+        kind: 'content',
+        text: `## Cara pikiranmu biasanya bekerja\n\nLayak diuji.\n\n> ${DISCLAIMER_ID}`,
+      },
+    ];
+    const frames = await post(PROFILE_A, { language: 'id' });
+    expect(JSON.parse(frames.find((f) => f.event === 'audit')!.data)).toEqual({ violations: [] });
+    const chunkText = frames
+      .filter((f) => f.event === 'chunk')
+      .map((f) => JSON.parse(f.data).text as string)
+      .join('');
+    // Nothing appended: the block appears exactly once.
+    expect(chunkText.indexOf('Apa ini dan apa yang bukan.')).toBe(
+      chunkText.lastIndexOf('Apa ini dan apa yang bukan.'),
+    );
   });
 });
