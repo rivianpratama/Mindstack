@@ -177,8 +177,13 @@ export function createThinkingPanel(): ThinkingPanelApi {
   murmur.appendChild(flow);
   panel.appendChild(murmur);
 
-  /** Words kept on screen. Older ones are dropped from the front. */
-  const WORD_WINDOW = 50;
+  /**
+   * Words kept on screen. Older ones are dropped from the front. Sized to
+   * OVERfill the .murmur window at its widest (~6 lines of ~16 words), so the
+   * oldest visible line is always dissolving into the top mask. An underfilled
+   * window reads as a dead band between the header and the text.
+   */
+  const WORD_WINDOW = 120;
   /**
    * The model arrives in bursts of dozens of words; releasing them all at once
    * reads as a flicker rather than as thinking, so they are metered out.

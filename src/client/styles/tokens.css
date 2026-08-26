@@ -77,6 +77,16 @@
 
   /* Vertical rhythm: the old .stack-flow 18px, tokenised. */
   --space-flow: 1.125rem;
+
+  /*
+   * Depth. Three steps only: xs for controls, sm for resting cards, lg for the
+   * one modal. Values are Tailwind's shadow scale; dark mode re-declares them
+   * with more alpha because a shadow on a near-black page needs it to read as
+   * an edge at all.
+   */
+  --shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.05);
+  --shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 0.07), 0 1px 2px -1px oklch(0 0 0 / 0.07);
+  --shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 0.1), 0 4px 6px -4px oklch(0 0 0 / 0.1);
 }
 
 /*
@@ -119,6 +129,10 @@
     --warn-bg: color-mix(in oklab, var(--warn) 14%, var(--card));
     --calm-bg: color-mix(in oklab, var(--calm) 14%, var(--card));
     --alarm-bg: color-mix(in oklab, var(--alarm) 14%, var(--card));
+
+    --shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.3);
+    --shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 0.35), 0 1px 2px -1px oklch(0 0 0 / 0.35);
+    --shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 0.45), 0 4px 6px -4px oklch(0 0 0 / 0.45);
   }
 }
 
@@ -153,4 +167,8 @@
   --warn-bg: color-mix(in oklab, var(--warn) 14%, var(--card));
   --calm-bg: color-mix(in oklab, var(--calm) 14%, var(--card));
   --alarm-bg: color-mix(in oklab, var(--alarm) 14%, var(--card));
+
+  --shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.3);
+  --shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 0.35), 0 1px 2px -1px oklch(0 0 0 / 0.35);
+  --shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 0.45), 0 4px 6px -4px oklch(0 0 0 / 0.45);
 }

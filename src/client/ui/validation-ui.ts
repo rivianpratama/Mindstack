@@ -9,7 +9,7 @@
 
 import { DEFAULT_SCALE_MAX, type FunctionKey } from '../../shared/geometry/types';
 import type { ValidationResult } from '../../shared/validation';
-import { el } from './dom';
+import { el, motionMs, prefersReducedMotion } from './dom';
 
 export type ConfirmChoice = 'confirm' | 'edit';
 
@@ -123,9 +123,47 @@ export function confirmOutOfRange(
      * form[method=dialog] collapses every exit path onto one `close` event:
      * either button sets returnValue from its own value, and Escape leaves it
      * empty. So Escape reads as 'edit', which is what it has always meant here.
+     *
+     * Both paths are intercepted first, though: dialog.close() removes the
+     * element from the top layer in the same frame, so the scale-out could
+     * never play. Dropping .is-open, letting the t-modal tween run, and only
+     * then closing is what makes the exit match the entrance.
      */
+    /*
+     * Every exit funnels into settle(), idempotently. Resolution deliberately
+     * does NOT depend on the `close` event: at least one embedded Chromium
+     * build never fires it, and a dialog that closes but never resolves leaves
+     * the whole submit hanging. The `close` listener below stays as a fallback
+     * for any path that skips closeWith.
+     */
+    let settled = false;
+    const settle = (choice: ConfirmChoice): void => {
+      if (settled) return;
+      settled = true;
+      dialog.remove();
+      resolve(choice);
+    };
+
+    let closing = false;
+    const closeWith = (value: string): void => {
+      if (closing) return;
+      closing = true;
+      dialog.classList.remove('is-open');
+      const finish = (): void => {
+        if (dialog.open) dialog.close(value);
+        settle(value === 'confirm' ? 'confirm' : 'edit');
+      };
+      if (prefersReducedMotion()) finish();
+      else setTimeout(finish, motionMs('--modal-close-dur', 200) + 20);
+    };
+
     const actions = el('form', 'dialog-actions');
     actions.setAttribute('method', 'dialog');
+    actions.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+      closeWith(submitter?.value ?? '');
+    });
     const confirm = el('button', 'btn btn-primary', 'Confirm, use as entered');
     confirm.value = 'confirm';
     confirm.autofocus = true;
@@ -135,14 +173,16 @@ export function confirmOutOfRange(
     body.appendChild(actions);
     dialog.appendChild(body);
 
-    // Guards the Escape-plus-click race the old handler did not cover.
-    let settled = false;
+    // Escape: cancel would close instantly, so it is routed through the same
+    // animated path. Empty returnValue still reads as 'edit'.
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      closeWith('');
+    });
+
+    // Fallback only: settle() has usually run by the time this fires.
     dialog.addEventListener('close', () => {
-      if (settled) return;
-      settled = true;
-      const choice: ConfirmChoice = dialog.returnValue === 'confirm' ? 'confirm' : 'edit';
-      dialog.remove();
-      resolve(choice);
+      settle(dialog.returnValue === 'confirm' ? 'confirm' : 'edit');
     });
 
     document.body.appendChild(dialog);

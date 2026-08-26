@@ -53,6 +53,10 @@
 .masthead {
   transition: margin-block-end var(--duration-fast) var(--ease-smooth-out);
 }
+/* The title shrinks with the block; without this it snaps between sizes. */
+.masthead h1 {
+  transition: font-size var(--duration-fast) var(--ease-smooth-out);
+}
 .masthead[data-compact='true'] {
   margin-block-end: 1rem;
 }
@@ -63,7 +67,8 @@
   display: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .masthead {
+  .masthead,
+  .masthead h1 {
     transition: none !important;
   }
 }
@@ -80,6 +85,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1rem 0.9375rem;
+  box-shadow: var(--shadow-sm);
 }
 @media (min-width: 768px) {
   .card {
@@ -169,6 +175,14 @@
  * of the tab order while the form is open - and unlike display it can be timed
  * against the height tween.
  */
+/* The chrome (border, shadow, background) leaves and returns on the same clock
+   as the height, so the card reads as one object while it folds. */
+.input-card {
+  transition:
+    background-color var(--acc-collapse) var(--acc-ease),
+    border-color var(--acc-collapse) var(--acc-ease),
+    box-shadow var(--acc-collapse) var(--acc-ease);
+}
 .input-card .acc-head-row {
   display: grid;
   grid-template-rows: 0fr;
@@ -193,17 +207,26 @@
 .input-card[data-open='false'] {
   background: none;
   border-color: transparent;
+  box-shadow: none;
 }
 
 .input-card .t-acc-head {
   inline-size: auto;
   justify-content: flex-start;
   gap: 0.4375rem;
-  padding: 0.375rem 0.25rem;
+  /* The negative margin buys the hover pill its inline padding back, so the
+     label stays optically aligned with the content edge. */
+  margin-inline-start: -0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
   color: var(--muted-foreground);
+  transition:
+    color var(--duration-quick) ease-out,
+    background-color var(--duration-quick) ease-out;
 }
 .input-card .t-acc-head:hover {
   color: var(--foreground);
+  background: var(--accent);
 }
 .input-card .acc-head-label {
   font-size: 0.875rem;
@@ -219,6 +242,7 @@
   transform: translateX(-2px);
 }
 @media (prefers-reduced-motion: reduce) {
+  .input-card,
   .input-card .acc-head-row,
   .input-card .acc-head-row > .card-title,
   .back-arrow {
@@ -283,6 +307,9 @@
   border-radius: calc(var(--radius) - 2px);
   font: inherit;
   font-size: 0.9375rem;
+  transition:
+    border-color var(--duration-quick) ease-out,
+    box-shadow var(--duration-quick) ease-out;
 }
 .input::placeholder {
   color: var(--muted-foreground);
@@ -292,11 +319,28 @@
   cursor: not-allowed;
 }
 
+/*
+ * Focus, shadcn-style: the border takes the ring colour (4.73:1, WCAG-clean)
+ * and a soft halo widens it. This replaces the global outline on inputs only -
+ * the halo + border is the more visible treatment here, not the less. Plain
+ * :focus, not :focus-visible: a text field's focus is always visible focus,
+ * and the modality heuristic would drop the ring after a mouse click.
+ */
+.input:focus {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent);
+}
+
 .field.invalid .field-label {
   color: var(--alarm);
 }
 .field.invalid .input {
   border-color: var(--alarm);
+}
+.field.invalid .input:focus {
+  border-color: var(--alarm);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--alarm) 25%, transparent);
 }
 
 .form-actions {
@@ -345,20 +389,29 @@
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
+  box-shadow: var(--shadow-xs);
   transition:
     background-color var(--duration-quick) ease-out,
-    opacity var(--duration-quick) ease-out;
+    opacity var(--duration-quick) ease-out,
+    transform var(--duration-quick) var(--ease-smooth-out);
+}
+/* A small physical press. Scale, not opacity: the label must not dim. */
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+  box-shadow: none;
 }
 .btn-primary {
   background: var(--primary);
   color: var(--primary-foreground);
 }
+/* Hover shifts the surface toward the page instead of fading the whole button,
+   so the label holds its contrast. */
 .btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
+  background: color-mix(in oklab, var(--primary) 88%, var(--background));
 }
 .btn-secondary {
   background: var(--secondary);
@@ -367,6 +420,14 @@
 }
 .btn-secondary:hover:not(:disabled) {
   background: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn {
+    transition-property: background-color, opacity;
+  }
+  .btn:active:not(:disabled) {
+    transform: none;
+  }
 }
 
 .example-link {
@@ -406,6 +467,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--card);
+  box-shadow: var(--shadow-xs);
 }
 .tier-strip-group {
   display: flex;
@@ -509,6 +571,16 @@
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: currentcolor;
+}
+/*
+ * Narrow screens: the tag takes its own line in every row. Rows with several
+ * chips wrap under the tag anyway, and holding the 7.5rem column only for the
+ * single-chip rows left their one chip floating mid-row.
+ */
+@media (max-width: 480px) {
+  .sig-tier-tag {
+    min-inline-size: 100%;
+  }
 }
 .sig-fns {
   display: flex;
@@ -713,6 +785,7 @@
   line-height: 1;
   color: var(--muted-foreground);
   cursor: pointer;
+  transition: color var(--duration-quick) ease-out;
 }
 .dismiss:hover {
   color: var(--foreground);
@@ -760,26 +833,45 @@
  * spills upward out of view rather than downward. No scrollbar, by design -
  * this is ambient, not a document.
  */
+/*
+ * The window grows with the text and stops at the cap, where the word window
+ * (ThinkingPanel's WORD_WINDOW) overfills it - roughly six lines at this type
+ * size on the widest card. A fixed height here was the old bug: with the flow
+ * bottom-anchored, any unfilled height sat as a dead band between the header
+ * and the drifting words. Content-driven height means there is never a gap,
+ * and at the cap the oldest line is always dissolving into the top mask.
+ */
 .murmur {
-  block-size: 10.5rem;
+  --murmur-cap: 8.75rem;
+  max-block-size: var(--murmur-cap);
   overflow: hidden;
   display: flex;
   align-items: flex-end;
-  -webkit-mask-image: linear-gradient(
-    transparent 0,
-    black var(--murmur-fade),
-    black calc(100% - var(--murmur-fade-bottom)),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    transparent 0,
-    black var(--murmur-fade),
-    black calc(100% - var(--murmur-fade-bottom)),
-    transparent 100%
-  );
 }
+/*
+ * The fade lives on the flow, with its stops measured in fixed units FROM THE
+ * BOTTOM. That is what keeps both states honest: while the flow is shorter
+ * than the cap everything sits inside the opaque band and renders at full
+ * strength, and once it outgrows the cap the words dissolve exactly at the
+ * window's visible top edge. A percentage mask on the window itself would fade
+ * the very first words while the flow is still short.
+ */
 .murmur-flow {
   inline-size: 100%;
+  -webkit-mask-image: linear-gradient(
+    to top,
+    transparent 0,
+    black var(--murmur-fade-bottom),
+    black calc(var(--murmur-cap) - var(--murmur-fade)),
+    transparent var(--murmur-cap)
+  );
+  mask-image: linear-gradient(
+    to top,
+    transparent 0,
+    black var(--murmur-fade-bottom),
+    black calc(var(--murmur-cap) - var(--murmur-fade)),
+    transparent var(--murmur-cap)
+  );
 }
 
 .murmur-w {
@@ -821,11 +913,15 @@
  */
 dialog.dialog {
   padding: 0;
+  /* Preflight zeroes every margin, dialog included, which un-centres a modal:
+     the UA's margin: auto is what centres it in the viewport. Restore it. */
+  margin: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--popover);
   color: var(--popover-foreground);
   max-inline-size: min(92vw, 26rem);
+  box-shadow: var(--shadow-lg);
 }
 .dialog-body {
   padding: 1.25rem;

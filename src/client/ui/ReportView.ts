@@ -15,7 +15,7 @@
  * runs, so no model output can inject markup.
  */
 
-import { createFrameScheduler, el, motionMs, shimmerText } from './dom';
+import { createFrameScheduler, el, motionMs, prefersReducedMotion, shimmerText } from './dom';
 import { applyTagChips } from './tags';
 import {
   createThinkingPanel,
@@ -452,8 +452,33 @@ export function createReportView(): ReportView {
     thinking = null;
     thinkingRetired = true;
     element.insertBefore(statusHost, thinkingHost);
+
+    if (prefersReducedMotion()) {
+      panel.remove();
+      return;
+    }
+
+    /*
+     * Two tweens on the same clock: the t-toast close fades the panel, and the
+     * host's height (plus its slot of stack rhythm) tweens to zero underneath
+     * it. Without the second one the fade ends in a hard jump - the node is
+     * removed, the host hits :empty { display: none }, and the report below
+     * snaps up by the panel's full height in a single frame.
+     */
+    const ms = motionMs('--toast-close', 250);
+    const ease = 'cubic-bezier(0.22, 1, 0.36, 1)';
+    thinkingHost.style.blockSize = `${thinkingHost.offsetHeight}px`;
+    thinkingHost.style.overflow = 'hidden';
     panel.classList.remove('is-open');
-    setTimeout(() => panel.remove(), motionMs('--toast-close', 250) + 30);
+    requestAnimationFrame(() => {
+      thinkingHost.style.transition = `block-size ${ms}ms ${ease}, margin-block-start ${ms}ms ${ease}`;
+      thinkingHost.style.blockSize = '0px';
+      thinkingHost.style.marginBlockStart = '0px';
+    });
+    setTimeout(() => {
+      panel.remove();
+      thinkingHost.removeAttribute('style');
+    }, ms + 30);
   };
 
   const banner = (kind: 'warn' | 'calm', title: string): HTMLElement => {

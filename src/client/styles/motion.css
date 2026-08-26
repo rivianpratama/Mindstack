@@ -32,6 +32,7 @@
 
   /* 06 modal open / close */
   --modal-open-dur: 250ms;
+  --modal-close-dur: 200ms;
   --modal-scale: 0.96;
   --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
 
@@ -143,21 +144,37 @@
 
 /* --- 06 modal open / close ---------------------------------------------- */
 
+/*
+ * Deviation from upstream: a close duration of its own. dialog.close() rips the
+ * element out of the top layer instantly, so the caller removes .is-open first,
+ * lets this tween play, and only then closes (validation-ui.ts).
+ */
 .t-modal {
   transform-origin: center;
   transform: scale(var(--modal-scale));
   opacity: 0;
   transition:
-    transform var(--modal-open-dur) var(--modal-ease),
-    opacity var(--modal-open-dur) var(--modal-ease);
+    transform var(--modal-close-dur) var(--modal-ease),
+    opacity var(--modal-close-dur) var(--modal-ease);
   will-change: transform, opacity;
 }
 .t-modal.is-open {
   transform: scale(1);
   opacity: 1;
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    opacity var(--modal-open-dur) var(--modal-ease);
 }
 .t-modal::backdrop {
   background: oklch(0 0 0 / 0.45);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity var(--modal-close-dur) var(--modal-ease);
+}
+.t-modal.is-open::backdrop {
+  opacity: 1;
+  transition: opacity var(--modal-open-dur) var(--modal-ease);
 }
 
 @media (prefers-reduced-motion: reduce) {

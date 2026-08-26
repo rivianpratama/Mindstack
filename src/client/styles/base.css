@@ -20,12 +20,19 @@ body {
 
 /*
  * Focus. --ring is darkened from the shadcn default precisely so this is
- * visible; do not soften it.
+ * visible; do not soften it. (.input swaps this for a border + halo of the
+ * same colour in components.css - a stronger treatment, not a weaker one.)
  */
 :focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
   border-radius: calc(var(--radius) - 4px);
+}
+
+/* Selection rides the theme instead of the OS accent. Tint only - text keeps
+   its own colour, so contrast is never in play. */
+::selection {
+  background: color-mix(in oklab, var(--primary) 15%, var(--background));
 }
 
 /*
