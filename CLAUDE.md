@@ -21,8 +21,11 @@ stored. Everything is computed in your browser," and two invariants below derive
   runtime must be a component class in components.css — app.css, components.css headers.
 - Zero new runtime dependencies; `dependencies` stays server-only — package.json.
 - No web fonts, self-hosted or otherwise; system stack only — app.css `--font-sans` comment.
-- tokens.css is the single source of truth; every new token goes into ALL THREE blocks (light,
-  media-dark, `[data-theme]` dark) or it silently stays light in dark mode — tokens.css.
+- tokens.css is the single source of truth; every new token goes into BOTH blocks (light `:root`
+  and the `[data-theme='dark']` override) or it silently stays light in dark mode — tokens.css.
+- The default theme is light regardless of OS preference; dark is opt-in via
+  `[data-theme='dark']` only (never a prefers-color-scheme block, never Tailwind's `dark:`
+  variant) — tokens.css, app.css.
 - `@theme inline` must stay `inline`; layer assignment happens only in app.css
   `@import ... layer()` — app.css.
 - Every motion snippet keeps its OWN `prefers-reduced-motion` guard; a blanket

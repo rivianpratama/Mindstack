@@ -6,6 +6,11 @@ writes here. NEVER read by scripts/build-*.mjs. -->
 
 Format: item — raised by — ruling — reason.
 
+- Default theme is light regardless of OS preference; the prefers-color-scheme activation block
+  was removed from tokens.css — user decision (2026-08-26) — **accepted** — dark stays fully
+  maintained but opt-in via `[data-theme='dark']`; a future toggle is attribute + meta updates
+  only. `meta color-scheme` is `light` and `theme-color` is single-valued until then.
+
 - Tier-chip tooltips are bare `title` attributes on non-focusable spans — designsystemchecklist
   c-tooltip-a11y — **accepted risk** — the full function names and scores are duplicated in the
   readout below the report, so this is redundancy loss, not information loss; a tooltip

@@ -38,9 +38,9 @@ archaeology, and records every deliberate deviation.
 }
 ```
 
-Upstream activates dark via a `.dark` class; Mindstack activates via
-`@media (prefers-color-scheme: dark)` plus a `[data-theme]` override block (tokens.css explains
-the duplication).
+Upstream activates dark via a `.dark` class; Mindstack defaults to light regardless of the OS
+and activates dark only via `:root[data-theme='dark']` (opt-in — there is deliberately no
+prefers-color-scheme block; tokens.css explains).
 
 ## Deviation table (token | upstream | ours | why)
 

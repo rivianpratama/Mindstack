@@ -44,7 +44,8 @@ settled items. Hard invariants and the motion budget live in CLAUDE.md — read 
    keep the region's content atomic (one label in the DOM at a time).
 7. **Contrast & states**: text ≥ 4.5:1, non-text UI (borders, rings) ≥ 3:1 on the surface it
    actually sits on; record the measured ratio as a trailing comment on the token; anything that
-   only reads in light mode is a bug (new tokens go in ALL THREE tokens.css blocks).
+   only reads in light mode is a bug (new tokens go in BOTH tokens.css blocks — light `:root`
+   and the `[data-theme='dark']` override; the default theme is light, dark is opt-in).
 8. **Media & motion**: every animation/transition has its OWN `prefers-reduced-motion` guard
    (blanket kills are forbidden — see CLAUDE.md); JS-driven motion branches on
    `prefersReducedMotion()`.

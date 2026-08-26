@@ -30,12 +30,13 @@
 @source '../../../src/client';
 
 /*
- * No @custom-variant dark. Tailwind v4's `dark:` already defaults to
- * prefers-color-scheme, which is exactly the behaviour we want, and almost
- * nothing needs it anyway: the tokens flip and every rule follows. If a manual
- * theme toggle is ever added, add
+ * No @custom-variant dark - and Tailwind's built-in `dark:` variant must NOT
+ * be used either: it follows prefers-color-scheme, but the app now defaults to
+ * light regardless of the OS, with dark opt-in via [data-theme='dark'] only
+ * (tokens.css). Almost nothing needs a dark-scoped utility anyway: the tokens
+ * flip and every rule follows. If one is ever needed, first add
  *   @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
- * so the utilities follow the attribute rather than the OS.
+ * so it follows the attribute rather than the OS.
  */
 
 @theme inline {
