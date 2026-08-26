@@ -2,7 +2,7 @@
  * The Hono app and its Node entry point.
  *
  * Two jobs only: serve the built client, and proxy /api/generate. All interpretation
- * lives in prompt/, all measurement in src/shared/geometry — this file wires them to a
+ * lives in prompt/, all measurement in src/shared/geometry; this file wires them to a
  * port and nothing else.
  */
 
@@ -20,7 +20,7 @@ import { isConfigured } from './deepseek';
  *
  * Resolved from import.meta.url, not cwd, so `npm start`, `tsx src/server/index.ts` and a
  * launch from any other directory all find the same file. The file is optional: a missing
- * .env throws, and that is fine — geometry, section 1 and flat-profile reports never need
+ * .env throws, and that is fine; geometry, section 1 and flat-profile reports never need
  * a key (see GET /api/health for which state the server is in).
  *
  * Verified on Node 22.17: process.loadEnvFile does NOT override variables already present
@@ -28,7 +28,7 @@ import { isConfigured } from './deepseek';
  * the file. That is the precedence we want for deploys and for tests.
  *
  * This runs after the imports above by ESM evaluation order, which is safe only because no
- * imported module reads process.env at module scope — deepseek.ts reads it inside
+ * imported module reads process.env at module scope; deepseek.ts reads it inside
  * readConfig()/isConfigured(), both called per request. Keep it that way.
  */
 try {
@@ -65,7 +65,7 @@ if (isEntryPoint) {
     const mode = process.env.NODE_ENV === 'production' ? 'production' : 'development';
     console.log(
       `Mindstack server on http://localhost:${info.port} (${mode}, report generator ` +
-        `${isConfigured() ? 'configured' : 'UNCONFIGURED — flat-profile reports only'})`,
+        `${isConfigured() ? 'configured' : 'UNCONFIGURED: flat-profile reports only'})`,
     );
   });
 }

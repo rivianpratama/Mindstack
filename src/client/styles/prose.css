@@ -1,0 +1,161 @@
+/*
+ * The locked-markup layer.
+ *
+ * Everything under .report-body is produced by renderMarkdown()
+ * (src/client/ui/ReportView.ts) and is pinned by exact-equality assertions in
+ * test/client.markdown.test.ts. It carries NO classes and can carry none, so
+ * every rule here is a descendant selector on a bare tag.
+ *
+ * The tag set is closed and provable from that function:
+ *     p . h3 . h4 . ul . li . strong . em . blockquote.disclaimer
+ * There is no a, code, pre, ol, h1/h2, table, hr, img or br, and none can ever
+ * appear. That is why @tailwindcss/typography is not installed: it would ship
+ * ~700 rules for tags that cannot occur.
+ *
+ * If you ever add a markdown feature to renderMarkdown, add its selector here.
+ *
+ * Sizes are em, not rem, on purpose: one font-size on the wrapper rescales the
+ * whole block proportionally. That is also why this is plain CSS rather than
+ * @apply - Tailwind's spacing scale is rem-absolute, so every rule would have
+ * to become an arbitrary value like [margin-bottom:0.9em].
+ */
+
+.report-body {
+  /* The wrapper carries its own type: finish() writes a bare text node here
+     for the empty-report placeholder. */
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--card-foreground);
+  text-wrap: pretty;
+}
+
+.report-body > :first-child {
+  margin-block-start: 0;
+}
+.report-body > :last-child {
+  margin-block-end: 0;
+}
+
+.report-body p {
+  margin-block: 0 0.9em;
+}
+
+.report-body h3 {
+  font-size: 1.0625em;
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  line-height: 1.4;
+  margin-block: 1.6em 0.5em;
+  color: var(--foreground);
+}
+
+.report-body h4 {
+  font-size: 0.9375em;
+  font-weight: 600;
+  line-height: 1.45;
+  margin-block: 1.35em 0.4em;
+  color: var(--muted-foreground);
+}
+
+.report-body ul {
+  margin-block: 0 0.9em;
+  padding-inline-start: 1.35em;
+  list-style: disc;
+}
+.report-body li {
+  margin-block-end: 0.4em;
+}
+.report-body li::marker {
+  color: var(--muted-foreground);
+}
+
+.report-body strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.report-body em {
+  font-style: italic;
+}
+
+/*
+ * The disclaimer (05 section 5.6). The only blockquote renderMarkdown emits,
+ * and it always carries class="disclaimer".
+ *
+ * These margins are load-bearing, not decorative: Tailwind's preflight zeroes
+ * blockquote margins, so without this the disclaimer collapses into the
+ * paragraph above it.
+ */
+.report-body blockquote.disclaimer {
+  margin-block: 1.4em 0.2em;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-inline-start: 3px solid var(--muted-foreground);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 0.9375em;
+  line-height: 1.65;
+}
+.report-body blockquote.disclaimer > p:last-child {
+  margin-block-end: 0;
+}
+
+/*
+ * The streaming caret. ReportView keeps ONE caret node and moves it between
+ * cards, so it is styled here rather than being given its own element per card.
+ */
+.report-body .caret {
+  display: inline-block;
+  inline-size: 0.5em;
+  border-block-end: 2px solid var(--muted-foreground);
+  animation: mk-blink 1s steps(2, start) infinite;
+}
+@keyframes mk-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .report-body .caret {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/*
+ * Three sibling zones with the same shape - code-generated bare tags, no
+ * classes - though only .report-body is test-locked.
+ */
+
+.banner ul {
+  margin-block: 0.5rem 0;
+  padding-inline-start: 1.25rem;
+}
+.banner li {
+  color: var(--card-foreground);
+  margin-block-end: 0.25rem;
+}
+
+.form-errors ul {
+  margin-block: 0.4rem 0;
+  padding-inline-start: 1.25rem;
+}
+.form-errors li {
+  margin-block-end: 0.25rem;
+}
+
+.dialog-body h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-block: 0 0.5rem;
+}
+.dialog-body p,
+.dialog-body li {
+  font-size: 0.875rem;
+  line-height: 1.55;
+  margin-block: 0 0.5rem;
+}
+.dialog-body ul {
+  margin-block: 0 0.625rem;
+  padding-inline-start: 1.25rem;
+}

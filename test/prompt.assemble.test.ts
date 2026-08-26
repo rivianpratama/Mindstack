@@ -109,7 +109,7 @@ describe('profile A selection (02 §5 geometry)', () => {
     expect(assemblyA.fragmentKeys).toContain('functions.Fe.e');
   });
 
-  it('includes the polarized axes, the sub-cluster and its members’ supporting blocks', () => {
+  it('includes the polarized axes, the sub-cluster and its members\' supporting blocks', () => {
     expect(assemblyA.fragmentKeys).toContain('dynamics.polarized-axes');
     expect(assemblyA.fragmentKeys).toContain('shapes.S3b');
     expect(assemblyA.fragmentKeys).toContain('dynamics.pluralistic');
@@ -286,7 +286,7 @@ describe('mixed-attitude lead (03 §3, the contrast case)', () => {
   });
 });
 
-describe('section 3 — self-generated 5W1H scenarios', () => {
+describe('section 3, self-generated scenarios', () => {
   it('ignores the request context entirely', () => {
     const withContext = assemblePrompt(sigA, {
       what: 'ship a joint product with a feuding team',
@@ -323,9 +323,9 @@ describe('section 3 — self-generated 5W1H scenarios', () => {
     expect(eruption!.eruptionFn).toBe('Fe');
     expect(eruption!.demands).toContain('Fe');
     expect(eruption!.modifiers).toHaveLength(3);
-    expect(eruption!.modifiers.join(' ')).toContain('sustained duration');
-    expect(eruption!.modifiers.join(' ')).toContain('no exit');
-    expect(eruption!.modifiers.join(' ')).toContain('evaluative audience');
+    expect(eruption!.modifiers.join(' ')).toContain('Sustained duration');
+    expect(eruption!.modifiers.join(' ')).toContain('No exit');
+    expect(eruption!.modifiers.join(' ')).toContain('Evaluative audience');
 
     // Profile B: Fi sits below a gap, not a cliff — watch grade only, so no such scenario.
     expect(sigB.eruption.firm).toHaveLength(0);
@@ -333,7 +333,7 @@ describe('section 3 — self-generated 5W1H scenarios', () => {
     expect(assemblyB.scenarios.every((scenario) => scenario.modifiers.length === 0)).toBe(true);
   });
 
-  it('gives every scenario a complete 5W1H frame', () => {
+  it('gives every scenario a complete scene frame', () => {
     for (const assembly of [assemblyA, assemblyB, assemblyMixed]) {
       for (const scenario of assembly.scenarios) {
         for (const field of ['who', 'what', 'when', 'where', 'why', 'how'] as const) {
@@ -343,17 +343,16 @@ describe('section 3 — self-generated 5W1H scenarios', () => {
     }
   });
 
-  it('instructs the vignette shape: 5W1H frame, 3-4 signatures, trade-off line', () => {
+  it('instructs the vignette shape: scene, 3-4 signatures, trade-off line', () => {
     const feature_ = feature(assemblyA.renderPlan, 'scenarios');
     const text = feature_.instructions.join(' ');
     expect(feature_.section).toBe(3);
     expect(text).toContain(`Render ALL ${assemblyA.scenarios.length} scenarios`);
-    expect(text).toContain('Who / What / When / Where / Why / How');
+    expect(text).toContain('setting the scene naturally');
     expect(text).toContain('THREE TO FOUR if-then signatures');
     expect(text).toContain('one trade-off line');
     expect(text).toContain('these situations are hypothetical');
     expect(text).toContain(DEMAND_WEIGHTING_RULE);
-    // Every scenario is spelled out with its band, row, grade and frame.
     for (const scenario of assemblyA.scenarios) {
       expect(text).toContain(`SCENARIO ${scenario.band.toUpperCase()}`);
       expect(text).toContain(scenario.demandType);
@@ -362,10 +361,10 @@ describe('section 3 — self-generated 5W1H scenarios', () => {
     expect(feature_.budgetWords).toBe(assemblyA.scenarios.length * 190);
   });
 
-  it('never frames the scenarios as the reader’s own situation', () => {
+  it('never frames the scenarios as the reader\'s own situation', () => {
     for (const assembly of [assemblyA, assemblyB, assemblyMixed]) {
       expect(assembly.userPrompt).not.toContain('as the person wrote it');
-      expect(assembly.userPrompt).not.toContain('No 5W1H situation was supplied');
+      expect(assembly.userPrompt).not.toContain('No scene situation was supplied');
       expect(assembly.userPrompt).not.toContain('common contexts');
       expect(assembly.userPrompt).toContain('Never imply the reader described any of them');
     }
@@ -417,7 +416,7 @@ describe('FLAT regime → honest null, no fragments, no LLM', () => {
       'Reynierse',
       'Mischel and Shoda',
       'Fleeson',
-      'unvalidated hobbyist questionnaire',
+      'hobby quiz',
     ]) {
       expect(report).toContain(fact);
     }
@@ -431,14 +430,14 @@ describe('FLAT regime → honest null, no fragments, no LLM', () => {
 
   it('carries a deterministic report with the verbatim disclaimer and no trait content', () => {
     const report = assemblyFlat.honestNullReport ?? '';
-    expect(report).toContain('too flat for this instrument to resolve structure');
-    expect(report).toContain('256-item Sakinorva Domains Test');
+    expect(report).toContain('too small for this quiz to read clearly');
+    expect(report).toContain('Sakinorva Domains Test (256 questions)');
     expect(hasDisclaimer(report)).toBe(true);
     expect(auditReport(report)).toEqual([]);
     // The single largest gap is the only structure a FLAT profile may name.
-    expect(report).toContain('watch item, not a tier boundary');
+    expect(report).toContain('small hint, and it could just be noise');
     // No trait content: nothing above the disclaimer asserts a tier, a shape or an essence.
-    const body = report.slice(0, report.indexOf('What this is — and is not.')).toLowerCase();
+    const body = report.slice(0, report.indexOf('What this is and is not.')).toLowerCase();
     for (const banned of ['lead cluster', 'your true', 'you will always', 'you tend to', 'erupt']) {
       expect(body).not.toContain(banned);
     }
@@ -515,7 +514,7 @@ describe('user prompt hygiene', () => {
     for (const fragment of assemblyA.fragments) expect(fragment.text.length).toBeGreaterThan(20);
   });
 
-  it('sizes the completion cap to the render plan’s word budget', () => {
+  it('sizes the completion cap to the render plan\'s word budget', () => {
     const words = assemblyA.renderPlan.reduce((sum, f) => sum + f.budgetWords, 0);
     expect(assemblyA.budgetWords).toBe(words);
     expect(assemblyA.maxTokens).toBeGreaterThan(words);
@@ -525,6 +524,52 @@ describe('user prompt hygiene', () => {
     expect(MAX_COMPLETION_TOKENS).toBe(32000);
     // Prose budget plus a large reasoning headroom, well above an output-only cap.
     expect(assemblyA.maxTokens).toBeGreaterThan(words + 4000);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * System message: foundations (Part A) before the contract (Part B)
+ * ------------------------------------------------------------------ */
+
+describe('system prompt composition', () => {
+  const system = assemblyA.systemPrompt;
+  const partA = system.indexOf('# PART A: FOUNDATIONS');
+  const partB = system.indexOf('# PART B: OPERATING CONTRACT');
+  const contract = system.indexOf('You are the report generator for Mindstack');
+
+  it('reads foundations first, then the operating contract', () => {
+    expect(partA).toBe(0);
+    expect(partA).toBeLessThan(partB);
+    expect(partB).toBeLessThan(contract);
+  });
+
+  it('embeds the generation contract verbatim (system-prompt.ts untouched)', () => {
+    expect(system).toContain(SYSTEM_PROMPT);
+    // A couple of contract landmarks still resolve after composition.
+    expect(system).toContain('Rule 0: GROUNDING');
+    expect(system).toContain('C1: Falsifiability quota');
+  });
+
+  it('carries real cognitive-function theory in the foundations block', () => {
+    const foundations = system.slice(partA, partB);
+    expect(foundations).toContain('Epistemic tiers');
+    expect(foundations).toContain('Internal closed circuit');
+    expect(foundations).toContain('eruptive');
+  });
+
+  it('strips the canonical worked example from the foundations block', () => {
+    const foundations = system.slice(partA, partB);
+    expect(foundations).not.toContain('Profile A');
+    expect(foundations).not.toContain('Profile B');
+    // No full score vector (4+ consecutive function-score pairs) survives.
+    expect(foundations).not.toMatch(
+      /(?:\b(?:Ni|Ne|Si|Se|Ti|Te|Fi|Fe)\s+\d{1,2}(?:\.\d)?\b[^A-Za-z0-9]{0,4}){4,}/,
+    );
+  });
+
+  it('uses the same composed system message on every regime (stable for prefix caching)', () => {
+    expect(assemblyFlat.systemPrompt).toBe(system);
+    expect(assemblyB.systemPrompt).toBe(system);
   });
 });
 
@@ -550,7 +595,7 @@ describe('comprehensive format — length contract', () => {
       `lands in ${TARGET_REPORT_WORDS[0]}–${TARGET_REPORT_WORDS[1]}`,
     );
     expect(assemblyA.userPrompt).toContain(`Total allocated budget: ~${assemblyA.budgetWords} words`);
-    expect(assemblyA.userPrompt).toContain('never with generic prose');
+    expect(assemblyA.userPrompt).toContain('Never with generic prose');
   });
 
   it('imposes no minimum where the geometry resolves little', () => {
@@ -612,20 +657,20 @@ describe('section 6 — "Where this report comes from"', () => {
 
   it('carries the provenance facts, with the right epistemic tiers', () => {
     const text = feature(assemblyA.renderPlan, 'provenance').instructions.join(' ');
-    expect(text).toContain('300–500 words');
+    expect(text).toContain('300-500 words');
     for (const source of ['Type Fundamentals', 'Function Theory', 'Type Development', 'Type Spotting']) {
       expect(text).toContain(source);
     }
     expect(text).toContain('mbti-notes.tumblr.com');
     expect(text).toContain('Quenk');
-    expect(text).toContain('engagement states');
+    expect(text).toContain('16 fixed types');
     expect(text).toContain('40,320');
     expect(text).toContain('Reynierse 2009');
-    expect(text).toContain('Mischel & Shoda 1995');
-    expect(text).toContain('Fleeson 2001');
-    expect(text).toContain('unvalidated hobbyist');
+    expect(text).toContain('Mischel and Shoda (1995)');
+    expect(text).toContain('Fleeson (2001)');
+    expect(text).toContain('hobby quiz');
     // The section explains the method; it must make no claim about the person.
-    expect(text).toContain('NO claim about the person');
+    expect(text).toContain('nothing about the person');
   });
 
   it('tells the model to write sections 2–7 with the exact headings', () => {
@@ -638,9 +683,9 @@ describe('section 6 — "Where this report comes from"', () => {
 
 describe('system prompt — rule hierarchy', () => {
   it('states grounding as the supreme rule, above the gates', () => {
-    expect(SYSTEM_PROMPT).toContain('Rule 0 — GROUNDING');
-    expect(SYSTEM_PROMPT.indexOf('Rule 0 — GROUNDING')).toBeLessThan(
-      SYSTEM_PROMPT.indexOf('C1 — Falsifiability quota'),
+    expect(SYSTEM_PROMPT).toContain('Rule 0: GROUNDING');
+    expect(SYSTEM_PROMPT.indexOf('Rule 0: GROUNDING')).toBeLessThan(
+      SYSTEM_PROMPT.indexOf('C1: Falsifiability quota'),
     );
     expect(SYSTEM_PROMPT).toContain('the theory mechanism it applies');
     for (const mechanism of [
@@ -664,18 +709,18 @@ describe('system prompt — rule hierarchy', () => {
   });
 
   it('downgrades the mirror test and keeps the falsifier quota at one per section', () => {
-    expect(SYSTEM_PROMPT).toContain('C4 — ADVISORY, not a delete gate');
-    expect(SYSTEM_PROMPT).toContain('C1 — hard, at one per section');
+    expect(SYSTEM_PROMPT).toContain('C4: ADVISORY, not a delete gate');
+    expect(SYSTEM_PROMPT).toContain('C1: hard, at one per section');
     expect(SYSTEM_PROMPT).toContain('strong guidance rather than a hard gate');
   });
 
   it('keeps the hard rules hard', () => {
     for (const rule of [
       'Geometry-anchor rule',
-      'C2 — hard, unchanged',
-      'C5 — hard, unchanged',
-      'C6 — hard, unchanged',
-      'Tier audibility rule',
+      'C2: hard, unchanged',
+      'C5: hard, unchanged',
+      'C6: hard, unchanged',
+      'Confidence audibility rule',
       'Plain language standard',
       'never studied psychology',
       'Type codes or type nouns',

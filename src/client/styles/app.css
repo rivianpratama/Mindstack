@@ -1,0 +1,98 @@
+/*
+ * Mindstack client stylesheet.
+ *
+ * Tailwind v4 is here as a token engine and preflight, not as the styling
+ * method. The app builds DOM through el(tag, className), and its largest
+ * surface - the report body - is markup pinned by exact-equality tests and can
+ * carry no classes at all. So:
+ *
+ *   A. tokens    - tokens.css is the source of truth; every rule reads var(--*)
+ *   B. components - components.css and prose.css, ordinary CSS, ~95% of the app
+ *   C. utilities  - permitted ONLY in static string literals passed to el().
+ *                   Never inside a template literal: Tailwind's scanner reads
+ *                   source text, not runtime values, and would drop the class.
+ *
+ * Layer assignment happens here via @import ... layer(), which keeps the leaf
+ * files plain and diffable - motion.css in particular is vendored from
+ * transitions.dev and should stay comparable against upstream.
+ */
+
+@import 'tailwindcss';
+@import './tokens.css' layer(base);
+@import './base.css' layer(base);
+@import './motion.css' layer(components);
+@import './components.css' layer(components);
+@import './prose.css' layer(components);
+
+/* Explicit and deterministic. dist/ is gitignored so the stale bundle would be
+   skipped anyway, but do not depend on that. */
+@source '../../../index.html';
+@source '../../../src/client';
+
+/*
+ * No @custom-variant dark. Tailwind v4's `dark:` already defaults to
+ * prefers-color-scheme, which is exactly the behaviour we want, and almost
+ * nothing needs it anyway: the tokens flip and every rule follows. If a manual
+ * theme toggle is ever added, add
+ *   @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+ * so the utilities follow the attribute rather than the OS.
+ */
+
+@theme inline {
+  /*
+   * No web font, self-hosted or otherwise. The app's own copy says "Nothing is
+   * stored. Everything is computed in your browser." - loading a font from a
+   * third party on every page view would contradict that, and self-hosting
+   * costs a dependency for a difference the system stack already covers:
+   * SF Pro on Apple, Segoe UI Variable on Windows, Roboto on Android, all
+   * neutral grotesques in Inter's family. The tabular figures Inter would have
+   * given for free are asked for explicitly in base.css.
+   */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI Variable Text', 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, 'Cascadia Mono',
+    'Liberation Mono', 'DejaVu Sans Mono', 'Courier New', monospace;
+  /* The murmur only. A serif italic reads as thinking-aloud rather than as log
+     output, which is the whole point of that surface. */
+  --font-serif: ui-serif, Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+
+  /*
+   * The bridge. `inline` is load-bearing: without it Tailwind emits
+   * `:root { --color-card: var(--card) }`, which resolves ONCE at :root against
+   * the light palette, so bg-card inside a dark scope still paints light.
+   * With `inline` the declaration is substituted at build time and resolves at
+   * the consuming element.
+   */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-tier-lead: var(--tier-lead);
+  --color-tier-support: var(--tier-support);
+  --color-tier-reserve: var(--tier-reserve);
+  --color-tier-shadow: var(--tier-shadow);
+  --color-warn: var(--warn);
+  --color-calm: var(--calm);
+  --color-alarm: var(--alarm);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+}

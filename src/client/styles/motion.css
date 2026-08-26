@@ -1,0 +1,241 @@
+/*
+ * Motion, vendored from transitions.dev (github.com/Jakubantalik/transitions.dev).
+ *
+ * Upstream ships ~200 tokens for 32 transitions; six of them fit this app, so
+ * only those are here. Two deliberate deviations from upstream:
+ *
+ *   - The shimmer/thinking colours are bound to theme tokens instead of the
+ *     hard-coded #7c7c7c / #0d0d0d, which would be invisible on a dark card.
+ *   - Each snippet keeps its OWN prefers-reduced-motion guard. Do not collapse
+ *     them into a blanket `* { transition: none }` - the dialog's .is-open
+ *     gating and the accordion's settle promise both sequence on transitions
+ *     completing, and a blanket rule breaks them.
+ */
+
+:root {
+  /* Shared scale, for hand-written motion (hover states, and so on). */
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 21 accordion expand */
+  --acc-expand: 250ms;
+  --acc-collapse: 250ms;
+  --acc-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 15 shimmer text - themed, unlike upstream */
+  --shimmer-dur: 2000ms;
+  --shimmer-base: var(--muted-foreground);
+  --shimmer-highlight: var(--foreground);
+  --shimmer-band: 400%;
+  --shimmer-ease: linear;
+
+  /* 06 modal open / close */
+  --modal-open-dur: 250ms;
+  --modal-scale: 0.96;
+  --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 22 toast open / close */
+  --toast-open: 350ms;
+  --toast-close: 250ms;
+  --toast-distance: 16px;
+  --toast-blur: 2px;
+  --toast-scale: 0.97;
+  --toast-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 12 error state shake */
+  --shake-distance: 6px;
+  --shake-overshoot: 4px;
+  --shake-dur-a: 80ms;
+  --shake-dur-b: 60ms;
+  --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --revert-dur: 280ms;
+
+  /* The murmur: drifting reasoning window (29 reasoning stream, mask only) */
+  --murmur-fade: 34px;
+  --murmur-fade-bottom: 6px;
+  --murmur-in: 520ms;
+  /* Minimum spacing between released words. The model arrives in bursts; this
+     is what turns them back into a readable drift. */
+  --murmur-pace: 70ms;
+  --murmur-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* --- 21 accordion expand ------------------------------------------------ */
+
+/* grid-template-rows 0fr -> 1fr gives a clean height animation with no JS
+   measurement; the inner element clips overflow. */
+.t-acc-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--acc-collapse) var(--acc-ease);
+}
+.t-acc[data-open='true'] .t-acc-panel {
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--acc-expand) var(--acc-ease);
+}
+.t-acc-panel-inner {
+  overflow: hidden;
+  opacity: 0;
+  filter: blur(2px);
+  transition:
+    opacity var(--acc-collapse) var(--acc-ease),
+    filter var(--acc-collapse) var(--acc-ease);
+}
+.t-acc[data-open='true'] .t-acc-panel-inner {
+  opacity: 1;
+  filter: blur(0);
+  transition:
+    opacity var(--acc-expand) var(--acc-ease),
+    filter var(--acc-expand) var(--acc-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-acc-panel,
+  .t-acc-panel-inner {
+    transition: none !important;
+  }
+}
+
+/* --- 15 shimmer text ---------------------------------------------------- */
+
+/* Two layers: the base text in --shimmer-base, then a ::before that duplicates
+   it via content: attr(data-text) and clips a moving gradient to the glyphs. */
+.t-shimmer {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base);
+}
+.t-shimmer::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    var(--shimmer-highlight) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: var(--shimmer-band) 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+}
+@keyframes t-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-shimmer::before {
+    animation: none !important;
+  }
+}
+
+/* --- 06 modal open / close ---------------------------------------------- */
+
+.t-modal {
+  transform-origin: center;
+  transform: scale(var(--modal-scale));
+  opacity: 0;
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    opacity var(--modal-open-dur) var(--modal-ease);
+  will-change: transform, opacity;
+}
+.t-modal.is-open {
+  transform: scale(1);
+  opacity: 1;
+}
+.t-modal::backdrop {
+  background: oklch(0 0 0 / 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-modal {
+    transition: none !important;
+  }
+}
+
+/* --- 22 toast open / close ---------------------------------------------- */
+
+.t-toast {
+  opacity: 0;
+  transform: translateY(var(--toast-distance)) scale(var(--toast-scale));
+  filter: blur(var(--toast-blur));
+  will-change: transform, opacity, filter;
+  transition:
+    opacity var(--toast-close) var(--toast-ease),
+    transform var(--toast-close) var(--toast-ease),
+    filter var(--toast-close) var(--toast-ease);
+}
+.t-toast.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  transition:
+    opacity var(--toast-open) var(--toast-ease),
+    transform var(--toast-open) var(--toast-ease),
+    filter var(--toast-open) var(--toast-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-toast {
+    transition: none !important;
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+/* --- 12 error state shake ------------------------------------------------ */
+
+/* This rule owns only the interpolation; the border colours themselves live in
+   components.css. Border width stays constant across states so the tween never
+   shifts inner content. Cumulative %-stops for 80+60+80+60 = 280ms. */
+.t-input {
+  transition: border-color 150ms ease-out;
+}
+.t-input.is-error {
+  transition: border-color var(--revert-dur) ease-out;
+}
+.t-shake {
+  animation: t-input-shake calc(var(--shake-dur-a) * 2 + var(--shake-dur-b) * 2) linear;
+}
+@keyframes t-input-shake {
+  0% {
+    transform: translateX(0);
+    animation-timing-function: var(--shake-ease);
+  }
+  28.57% {
+    transform: translateX(var(--shake-distance));
+    animation-timing-function: var(--shake-ease);
+  }
+  57.14% {
+    transform: translateX(calc(var(--shake-distance) * -1));
+    animation-timing-function: var(--shake-ease);
+  }
+  78.57% {
+    transform: translateX(var(--shake-overshoot));
+    animation-timing-function: var(--shake-ease);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-shake {
+    animation: none !important;
+    transform: none !important;
+  }
+}

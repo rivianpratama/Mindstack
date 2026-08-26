@@ -1,5 +1,5 @@
 /**
- * The DeepSeek proxy. The key lives here and nowhere else — it is never sent to the
+ * The DeepSeek proxy. The key lives here and nowhere else: it is never sent to the
  * client, and no upstream error body is ever forwarded verbatim.
  *
  * Model id, base URL and key all come from the environment (DeepSeek's model names
@@ -11,7 +11,7 @@
  * (thinking) alongside `content` (the answer). Thinking is switched with the documented
  * `thinking: { type: 'enabled' | 'disabled' }` parameter and is ON and UNBOUNDED by default
  * (user requirement). `reasoning_content` is streamed to the reader as a separate `thinking`
- * SSE event (see routes/generate.ts) — clearly labeled raw scratch work, and NEVER buffered,
+ * SSE event (see routes/generate.ts), clearly labeled raw scratch work, and NEVER buffered,
  * audited, or given the disclaimer; only `content` is the report. Empty/truncated failure
  * modes are judged on content alone (see `classifyStreamOutcome`). Because thinking tokens
  * are billed against `max_tokens`, MAX_COMPLETION_TOKENS is set to the model ceiling and
@@ -38,7 +38,7 @@ const RETRY_BACKOFF_MS = [250, 750];
 /**
  * Completion cap. The comprehensive format has a 2000-word hard floor and a 2200-3000
  * word target, which is roughly 3000-4500 output tokens; 8000 leaves room for a long
- * profile plus the verbatim disclaimer without truncating mid-section — comfortable, but
+ * profile plus the verbatim disclaimer without truncating mid-section. Comfortable, but
  * only because reasoning tokens no longer compete for the same budget.
  */
 // Reasoning is ON by default (see DEFAULT_REASONING_EFFORT). The model's hidden thinking
@@ -49,17 +49,17 @@ export const MAX_COMPLETION_TOKENS = 32000;
 
 /**
  * Thinking ON but BOUNDED by default. It was unbounded ("let the LLM judge itself"), but on
- * a 16k-token prompt the model deliberated for minutes — too slow in practice — so the
+ * a 16k-token prompt the model deliberated for minutes, too slow in practice, so the
  * default is now the shortest effort, `minimal`: the thinking panel still shows real
  * reasoning, but the model is told to keep it brief. Per the DeepSeek docs, reasoning is
  * switched with the dedicated `thinking: { type: 'enabled' | 'disabled' }` parameter (see
  * buildChatRequest); `reasoning_effort` is a SEPARATE cap sent alongside it.
  *
  * Control with DEEPSEEK_REASONING_EFFORT (tune without a code change; restart to apply):
- *   `none`    → OFF — fastest (~48s), no thinking panel content;
+ *   `none`    → OFF, fastest (~48s), no thinking panel content;
  *   `minimal` → shortest thinking (the default);
  *   `low` / `medium` / `high` → progressively more (and slower);
- *   `default` → unbounded — the model decides (slowest; can take minutes).
+ *   `default` → unbounded, the model decides (slowest; can take minutes).
  */
 export const DEFAULT_REASONING_EFFORT: ReasoningEffort | null = 'minimal';
 
@@ -147,12 +147,12 @@ export interface StreamRequest {
 /**
  * One item off the stream. Two kinds travel the same channel, tagged so the route can
  * route each to its own SSE event:
- *   - `content`  — a `delta.content` piece: the report itself, buffered and audited.
- *   - `thinking` — a `delta.reasoning_content` piece: the model's raw reasoning, streamed
+ *   - `content`:  a `delta.content` piece, the report itself, buffered and audited.
+ *   - `thinking`: a `delta.reasoning_content` piece, the model's raw reasoning, streamed
  *                  to the reader verbatim but never part of the report (not buffered, not
  *                  audited, no disclaimer).
  *
- * Empty/truncation detection judges CONTENT only — thinking is never report text — so the
+ * Empty/truncation detection judges CONTENT only, thinking is never report text, so the
  * `contentChars`/`reasoningChars` bookkeeping and `classifyStreamOutcome` are unchanged.
  */
 export interface StreamReportItem {
@@ -235,7 +235,7 @@ export function classifyStreamOutcome(outcome: StreamOutcome): DeepSeekError | n
     return new DeepSeekEmptyReportError(
       'The report generator returned no report text.' +
         spentThinking +
-        ' Nothing was written, so there is nothing to show — please try again.',
+        ' Nothing was written, so there is nothing to show; please try again.',
     );
   }
 
@@ -255,7 +255,7 @@ export function classifyStreamOutcome(outcome: StreamOutcome): DeepSeekError | n
  * Streams the completion as tagged items (see `StreamReportItem`).
  *
  * One retry, and only on 429 or 5xx, and only before the first item has reached the client
- * — once anything (thinking or content) has streamed there is nothing to rewind, and a
+ * : once anything (thinking or content) has streamed there is nothing to rewind, and a
  * retry would replay the model's reasoning from scratch.
  *
  * `reasoning_content` deltas are surfaced as `thinking` items and counted, but never mixed
@@ -264,7 +264,7 @@ export function classifyStreamOutcome(outcome: StreamOutcome): DeepSeekError | n
  */
 export async function* streamReport(request: StreamRequest): AsyncGenerator<StreamReportItem> {
   const config = readConfig();
-  // maxRetries: 0 — the retry policy is the one below (exactly one, and only before the
+  // maxRetries: 0. The retry policy is the one below (exactly one, and only before the
   // first item reaches the client), not the SDK's default of two silent replays.
   const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL, maxRetries: 0 });
 
@@ -362,7 +362,7 @@ function describe(error: unknown, timedOut: boolean): DeepSeekError {
 
   if (status === 401 || status === 403) {
     return new DeepSeekError(
-      'The report generator rejected this server’s credentials. This is a server-side ' +
+      'The report generator rejected this server\'s credentials. This is a server-side ' +
         'configuration problem, not something you can fix.',
       { status, retryable: false },
     );

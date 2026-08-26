@@ -152,7 +152,7 @@ function loadStore(): FragmentStore {
   }
 
   throw new Error(
-    'kb/loader: could not load fragments.json — run `node scripts/build-kb.mjs`. ' +
+    'kb/loader: could not load fragments.json. Run `node scripts/build-kb.mjs`. ' +
       `Last error: ${String(lastError)}`,
   );
 }
@@ -161,7 +161,7 @@ function get(key: string): string {
   const text = loadStore().fragments[key];
   if (typeof text !== 'string' || text.length === 0) {
     throw new Error(
-      `kb/loader: fragment "${key}" is missing from fragments.json — rebuild with ` +
+      `kb/loader: fragment "${key}" is missing from fragments.json. Rebuild with ` +
         '`node scripts/build-kb.mjs`',
     );
   }

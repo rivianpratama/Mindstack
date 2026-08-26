@@ -96,10 +96,10 @@ describe('renderMarkdown - the supported subset', () => {
 
   it('renders the disclaimer as a distinct blockquote', () => {
     const html = renderMarkdown(
-      '> **What this is — and is not.** This report is structured self-reflection.',
+      '> **What this is and is not.** This report is structured self-reflection.',
     );
     expect(html).toBe(
-      '<blockquote class="disclaimer"><p><strong>What this is — and is not.</strong> ' +
+      '<blockquote class="disclaimer"><p><strong>What this is and is not.</strong> ' +
         'This report is structured self-reflection.</p></blockquote>',
     );
   });
@@ -115,34 +115,26 @@ describe('renderMarkdown - the supported subset', () => {
 });
 
 describe('applyTagChips', () => {
-  it('chips each of the four tiers', () => {
-    expect(applyTagChips('[S]')).toContain('tag tag-s');
-    expect(applyTagChips('[D]')).toContain('tag tag-d');
-    expect(applyTagChips('[H]')).toContain('tag tag-h');
-    expect(applyTagChips('[D→H]')).toContain('tag tag-dh');
+  it('strips all four tag markers', () => {
+    expect(applyTagChips('[S]')).toBe('');
+    expect(applyTagChips('[D]')).toBe('');
+    expect(applyTagChips('[H]')).toBe('');
+    expect(applyTagChips('[D→H]')).toBe('');
   });
 
-  it('recognises the arrow written as -> or already escaped', () => {
-    expect(applyTagChips('[D->H]')).toContain('tag tag-dh');
-    expect(applyTagChips('[D-&gt;H]')).toContain('tag tag-dh');
-  });
-
-  it('does not mistake [D→H] for a bare [D]', () => {
-    const html = applyTagChips('[D→H]');
-    expect(html).not.toContain('tag-d"');
-    expect((html.match(/class="tag/g) ?? []).length).toBe(1);
+  it('strips the arrow written as -> or already escaped', () => {
+    expect(applyTagChips('[D->H]')).toBe('');
+    expect(applyTagChips('[D-&gt;H]')).toBe('');
   });
 
   it('leaves unrelated brackets alone', () => {
     expect(applyTagChips('a [note] and [S1]')).toBe('a [note] and [S1]');
   });
 
-  it('runs safely over escaped model output', () => {
+  it('strips tags from escaped model output', () => {
     const html = applyTagChips(renderMarkdown('One reading [H] to test. Research shows [S].'));
-    expect(html).toContain('class="tag tag-h"');
-    expect(html).toContain('class="tag tag-s"');
-    // The markers survive only as chip labels, never as bare text.
-    expect(html).not.toMatch(/(^|[^>])\[H\]/);
+    expect(html).not.toContain('[H]');
+    expect(html).not.toContain('[S]');
   });
 });
 
@@ -244,7 +236,7 @@ function longReport(): string {
     }
     parts.push(`- one ${words(6, s)}\n- two ${words(6, s + 1)}\n\n`);
   });
-  parts.push('> **What this is — and is not.** This report is structured self-reflection.\n');
+  parts.push('> **What this is and is not.** This report is structured self-reflection.\n');
   return parts.join('');
 }
 
@@ -327,7 +319,8 @@ describe('createSectionSplitter', () => {
     expect(final.map((s) => s.title)).toEqual([null, ...SECTION_TITLES]);
     expect(html).toContain('<blockquote class="disclaimer">');
     expect((html.match(/<p>/g) ?? []).length).toBe(SECTION_TITLES.length * 8 + 2);
-    expect((html.match(/class="tag tag-h"/g) ?? []).length).toBe(SECTION_TITLES.length * 8);
+    expect(html).not.toMatch(/class="tag tag-/);
+    expect(html).not.toContain('[H]');
     // Generous tripwire: a quadratic regression blows straight through this.
     expect(elapsed).toBeLessThan(5000);
   });

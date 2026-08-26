@@ -1,0 +1,842 @@
+/*
+ * Every semantic class the app emits.
+ *
+ * These are component classes, not utilities, and that is load-bearing:
+ * component classes are emitted unconditionally, whereas @utility output is
+ * tree-shaken against scanned source. ReportView builds `banner ${kind}` at
+ * runtime, so `banner`, `warn` and `calm` MUST live here or they vanish from
+ * the bundle. Same reasoning for anything else assembled from a template
+ * literal. (SignatureView uses dataset.tier + attribute selectors, which are
+ * never scanned, so those are safe either way.)
+ */
+
+/* --- shell -------------------------------------------------------------- */
+
+.app {
+  max-inline-size: 46rem;
+  margin-inline: auto;
+  padding: 1.5rem 0.875rem 5rem;
+}
+@media (min-width: 768px) {
+  .app {
+    padding: 3rem 1.5rem 6rem;
+  }
+}
+
+.stack-flow > * + * {
+  margin-block-start: var(--space-flow);
+}
+
+.masthead {
+  margin-block-end: 2rem;
+}
+.masthead h1 {
+  margin: 0;
+  font-size: 1.875rem;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+.masthead p {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+  max-inline-size: 34rem;
+}
+
+/*
+ * Once a report is running the masthead shrinks. The tagline has done its job
+ * by then, and every pixel above the report is a pixel the reader has to scroll
+ * past to reach the thing they asked for.
+ */
+.masthead {
+  transition: margin-block-end var(--duration-fast) var(--ease-smooth-out);
+}
+.masthead[data-compact='true'] {
+  margin-block-end: 1rem;
+}
+.masthead[data-compact='true'] h1 {
+  font-size: 1.25rem;
+}
+.masthead[data-compact='true'] p {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .masthead {
+    transition: none !important;
+  }
+}
+
+/* --- card --------------------------------------------------------------- */
+
+/*
+ * These four used to free-ride on the `wired-card` element selector and had no
+ * rules of their own; with the custom element gone, this is the anchor.
+ */
+.card {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 0.9375rem;
+}
+@media (min-width: 768px) {
+  .card {
+    padding: 1.25rem 1.375rem;
+  }
+}
+
+/* An accordion owns its own padding, on the inner element only. */
+.card.t-acc {
+  padding: 0;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+.card-sub {
+  margin: 0.375rem 0 1rem;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+.muted {
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+
+/* --- accordion chrome --------------------------------------------------- */
+
+.acc-head-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.t-acc-head {
+  inline-size: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 0.9375rem;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+@media (min-width: 768px) {
+  .t-acc-head {
+    padding: 1.25rem 1.375rem;
+  }
+}
+.acc-head-label {
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/*
+ * Padding goes on the BODY, never on .t-acc-panel-inner and never on the track.
+ * The inner element clips; its own padding would floor its height and leave a
+ * residual strip that keeps the panel from ever closing flush.
+ */
+.t-acc-panel-body {
+  padding: 0 0.9375rem 1rem;
+}
+@media (min-width: 768px) {
+  .t-acc-panel-body {
+    padding: 0 1.375rem 1.25rem;
+  }
+}
+
+/* --- the form shell: hidden while a report runs -------------------------- */
+
+/*
+ * The accordion head here is a back button, not a persistent header. It is
+ * given height only while the card is shut, so the open state is a plain card
+ * with no disclosure chrome and the shut state is a lone back affordance.
+ * Same 0fr <-> 1fr counterpoint as the panel, so the two swap smoothly.
+ *
+ * visibility (not display) does the accessibility half - the button must be out
+ * of the tab order while the form is open - and unlike display it can be timed
+ * against the height tween.
+ */
+.input-card .acc-head-row {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--acc-expand) var(--acc-ease);
+}
+.input-card[data-open='false'] .acc-head-row {
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--acc-collapse) var(--acc-ease);
+}
+.input-card .acc-head-row > .card-title {
+  overflow: hidden;
+  margin: 0;
+  visibility: hidden;
+  transition: visibility 0s linear var(--acc-expand);
+}
+.input-card[data-open='false'] .acc-head-row > .card-title {
+  visibility: visible;
+  transition: visibility 0s linear 0s;
+}
+
+/* Shut, the card drops its own chrome and reads as a plain back link. */
+.input-card[data-open='false'] {
+  background: none;
+  border-color: transparent;
+}
+
+.input-card .t-acc-head {
+  inline-size: auto;
+  justify-content: flex-start;
+  gap: 0.4375rem;
+  padding: 0.375rem 0.25rem;
+  color: var(--muted-foreground);
+}
+.input-card .t-acc-head:hover {
+  color: var(--foreground);
+}
+.input-card .acc-head-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: normal;
+}
+.back-arrow {
+  display: inline-flex;
+  flex: none;
+  transition: transform var(--duration-quick) var(--ease-smooth-out);
+}
+.input-card .t-acc-head:hover .back-arrow {
+  transform: translateX(-2px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .input-card .acc-head-row,
+  .input-card .acc-head-row > .card-title,
+  .back-arrow {
+    transition: none !important;
+  }
+}
+
+/* The title lives inside the panel now, so the panel owns its top padding. */
+.input-card .t-acc-panel-body {
+  padding: 1rem 0.9375rem;
+}
+@media (min-width: 768px) {
+  .input-card .t-acc-panel-body {
+    padding: 1.25rem 1.375rem;
+  }
+}
+.input-card .card-title + .card-sub {
+  margin-block-start: 0.375rem;
+}
+
+/* --- the score form ----------------------------------------------------- */
+
+.axis-group + .axis-group {
+  margin-block-start: 1.125rem;
+}
+.axis-group h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+}
+.axis-fields {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.625rem;
+}
+@media (min-width: 520px) {
+  .axis-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+}
+.field-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.input {
+  inline-size: 100%;
+  padding: 0.5rem 0.625rem;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  font: inherit;
+  font-size: 0.9375rem;
+}
+.input::placeholder {
+  color: var(--muted-foreground);
+}
+.input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.field.invalid .field-label {
+  color: var(--alarm);
+}
+.field.invalid .input {
+  border-color: var(--alarm);
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.875rem;
+  margin-block-start: 1.25rem;
+  padding-block-start: 1.125rem;
+  border-block-start: 1px solid var(--border);
+}
+
+.stale-note {
+  display: none;
+  margin: 0.75rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--warn);
+}
+.t-acc[data-stale='true'] .stale-note {
+  display: block;
+}
+
+.form-errors {
+  margin-block-start: 0.875rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--alarm);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--alarm-bg);
+  font-size: 0.875rem;
+}
+.form-errors b {
+  font-weight: 600;
+}
+
+/* --- buttons ------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.9375rem;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 2px);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-quick) ease-out,
+    opacity var(--duration-quick) ease-out;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.btn-secondary {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  border-color: var(--border);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--accent);
+}
+
+.example-link {
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.example-link:hover:not(:disabled) {
+  color: var(--foreground);
+}
+.example-link:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* --- the compact tier strip ---------------------------------------------- */
+
+/*
+ * The headline reading, sitting between the back button and the thinking panel.
+ * Codes only: this is the glanceable answer, and the scores, cliffs and every
+ * other reading live in the full readout below the finished report.
+ *
+ * Each group carries its tier colour and the codes inherit it via currentColor,
+ * exactly as the fuller tier rows do, so the two stay visually the same object.
+ */
+.tier-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1.25rem;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.tier-strip-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+.tier-strip-group[data-tier='lead'] {
+  color: var(--tier-lead);
+}
+.tier-strip-group[data-tier='support'] {
+  color: var(--tier-support);
+}
+.tier-strip-group[data-tier='reserve'] {
+  color: var(--tier-reserve);
+}
+.tier-strip-group[data-tier='shadow'] {
+  color: var(--tier-shadow);
+}
+.tier-strip-tag {
+  flex: none;
+  font-size: 0.625rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: currentcolor;
+}
+.tier-strip-fns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3125rem;
+  min-inline-size: 0;
+}
+.tier-strip-fn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  cursor: help;
+}
+.tier-strip-fn > b {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 650;
+  color: var(--foreground);
+}
+.tier-strip-fn > i {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+
+/* --- the signature readout ---------------------------------------------- */
+
+.regime-notice {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.875rem;
+  border-inline-start: 3px solid var(--warn);
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--warn-bg);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.sig-signature {
+  display: grid;
+  gap: 0.375rem;
+}
+
+/* One row per tier, each carrying that tier's colour; the chips inherit it
+   through currentColor. */
+.sig-tier {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+}
+.sig-tier[data-tier='lead'] {
+  color: var(--tier-lead);
+}
+.sig-tier[data-tier='support'] {
+  color: var(--tier-support);
+}
+.sig-tier[data-tier='reserve'] {
+  color: var(--tier-reserve);
+}
+.sig-tier[data-tier='shadow'] {
+  color: var(--tier-shadow);
+}
+
+.sig-tier-tag {
+  flex: none;
+  min-inline-size: 7.5rem;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: currentcolor;
+}
+.sig-fns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+.sig-fn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3125rem;
+  padding: 0.1875rem 0.5rem;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.8125rem;
+}
+.sig-fn b {
+  font-weight: 650;
+  color: currentcolor;
+}
+.sig-fn-score {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.band-note {
+  margin: 0.875rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+.sig-block + .sig-block {
+  margin-block-start: 1.75rem;
+  padding-block-start: 1.5rem;
+  border-block-start: 1px solid var(--border);
+}
+.sig-block > h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.sig-blurb {
+  margin: 0 0 0.875rem;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+.readout {
+  display: grid;
+  gap: 0.125rem;
+}
+.readout-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.125rem 1rem;
+  padding: 0.625rem 0;
+  border-block-start: 1px dashed var(--border);
+}
+.readout-row:first-child {
+  border-block-start: 0;
+  padding-block-start: 0;
+}
+@media (min-width: 560px) {
+  .readout-row {
+    grid-template-columns: 11rem 1fr;
+    align-items: baseline;
+  }
+}
+.readout-k {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.readout-k > b {
+  font-family: var(--font-mono);
+  font-weight: 650;
+  color: var(--foreground);
+}
+.readout-fn-name {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.readout-v {
+  display: block;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.readout-v > b {
+  font-weight: 600;
+}
+.readout-note {
+  display: block;
+  margin-block-start: 0.125rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+.sig-list {
+  margin: 0.5rem 0 0;
+  padding-inline-start: 1.15rem;
+  display: grid;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.sig-list li::marker {
+  color: var(--muted-foreground);
+}
+.sig-list b {
+  font-weight: 600;
+}
+.sig-signature + .sig-list {
+  margin-block-start: 0.875rem;
+}
+
+/* --- report ------------------------------------------------------------- */
+
+/*
+ * The report's containers are all mounted up front and filled later, so most of
+ * them are empty most of the time. Left alone each one still claims a slot of
+ * .stack-flow rhythm, which stacks up into a visible dead band above the report.
+ *
+ * The banner and thinking hosts can go entirely when empty. The status must NOT:
+ * it is an aria-live region, and a region that is display:none when its text
+ * changes may never announce that change. So it is flattened instead of hidden.
+ */
+.banner-host:empty,
+.thinking-host:empty {
+  display: none;
+}
+.report > .status:empty {
+  min-block-size: 0;
+  margin-block-start: 0;
+}
+
+.status {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  min-block-size: 1.25rem;
+}
+.status-elapsed {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.report-section > h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+
+.banner {
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+.banner.warn {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+.banner.calm {
+  border-color: var(--calm);
+  background: var(--calm-bg);
+}
+.banner-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-weight: 600;
+}
+.banner.warn .banner-head > span {
+  color: var(--warn);
+}
+.banner.calm .banner-head > span {
+  color: var(--calm);
+}
+.banner-body {
+  margin-block-start: 0.5rem;
+  color: var(--card-foreground);
+  font-weight: 400;
+}
+.dismiss {
+  flex: none;
+  padding: 0 0.25rem;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 1.125rem;
+  line-height: 1;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.dismiss:hover {
+  color: var(--foreground);
+}
+
+.error-card {
+  border-color: var(--alarm);
+}
+.error-card .card-title {
+  color: var(--alarm);
+}
+.error-card .btn {
+  margin-block-start: 0.875rem;
+}
+
+/* --- thinking panel ------------------------------------------------------ */
+
+/*
+ * Deliberately unlike a report card: this is the model's raw reasoning, not the
+ * report, and it must not be mistaken for it. Always open - no disclosure
+ * chrome, nothing to collapse.
+ */
+.thinking-panel {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+  padding: 0.75rem 0.875rem 0.5rem;
+}
+.thinking-head {
+  margin-block-end: 0.125rem;
+}
+/* The status line lives in the header once the panel exists. */
+.thinking-head .status {
+  min-block-size: 0;
+  font-size: 0.8125rem;
+}
+
+/*
+ * The murmur. A fixed window that the reasoning drifts through: new words land
+ * at the bottom, older ones rise and dissolve into the top edge. The mask does
+ * the fading at both edges, so the card background can be anything and there is
+ * no painted gradient to keep in sync with the theme.
+ *
+ * align-items: flex-end is what anchors the text to the bottom, so overflow
+ * spills upward out of view rather than downward. No scrollbar, by design -
+ * this is ambient, not a document.
+ */
+.murmur {
+  block-size: 10.5rem;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  -webkit-mask-image: linear-gradient(
+    transparent 0,
+    black var(--murmur-fade),
+    black calc(100% - var(--murmur-fade-bottom)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    transparent 0,
+    black var(--murmur-fade),
+    black calc(100% - var(--murmur-fade-bottom)),
+    transparent 100%
+  );
+}
+.murmur-flow {
+  inline-size: 100%;
+}
+
+.murmur-w {
+  display: inline-block;
+  margin-inline-end: 0.3em;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.8125rem;
+  line-height: 1.75;
+  color: var(--muted-foreground);
+  /* Plays on insertion - no class toggle, so it cannot be missed the way a
+     requestAnimationFrame can be in a backgrounded tab. */
+  animation: murmur-in var(--murmur-in) var(--murmur-ease) both;
+}
+@keyframes murmur-in {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateY(0.35em);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .murmur-w {
+    animation: none !important;
+  }
+}
+
+/* --- confirm dialog ------------------------------------------------------ */
+
+/*
+ * A native <dialog>, so it finally participates in the theme. The old
+ * wired-dialog hard-coded a white card inside its shadow root, which is why
+ * this content used literal hex and was unreadable in dark mode.
+ */
+dialog.dialog {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  max-inline-size: min(92vw, 26rem);
+}
+.dialog-body {
+  padding: 1.25rem;
+}
+.dialog-body .fine {
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+}
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+  margin-block-start: 1.125rem;
+}

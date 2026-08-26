@@ -76,7 +76,7 @@ describe('POST /api/generate — thinking + content streaming', () => {
     control.items = [
       { kind: 'thinking', text: 'weighing the Ni spike ' },
       { kind: 'thinking', text: 'against the Fe floor ' },
-      { kind: 'content', text: '## How your processing runs\n\nWorth testing [H].' },
+      { kind: 'content', text: '## How your processing runs\n\nWorth testing.' },
       { kind: 'content', text: withDisclaimer('') },
     ];
 
@@ -97,7 +97,7 @@ describe('POST /api/generate — thinking + content streaming', () => {
   it('passes thinking text through verbatim on the thinking event', async () => {
     control.items = [
       { kind: 'thinking', text: 'raw chain of thought, kept as-is' },
-      { kind: 'content', text: withDisclaimer('## How your processing runs\n\nWorth testing [H].') },
+      { kind: 'content', text: withDisclaimer('## How your processing runs\n\nWorth testing.') },
     ];
 
     const frames = await post(PROFILE_A);
@@ -112,7 +112,7 @@ describe('POST /api/generate — thinking + content streaming', () => {
     // claim — so an empty audit proves thinking stayed out of the guarded buffer.
     control.items = [
       { kind: 'thinking', text: 'This person is clearly an INTJ, only 3% of profiles score this.' },
-      { kind: 'content', text: withDisclaimer('## How your processing runs\n\nWorth testing [H].') },
+      { kind: 'content', text: withDisclaimer('## How your processing runs\n\nWorth testing.') },
     ];
 
     const frames = await post(PROFILE_A);
@@ -136,7 +136,7 @@ describe('POST /api/generate — thinking + content streaming', () => {
   it('appends the disclaimer to CONTENT when the model omits it, ignoring thinking', async () => {
     control.items = [
       { kind: 'thinking', text: 'no disclaimer here, and that is fine' },
-      { kind: 'content', text: '## How your processing runs\n\nWorth testing [H]. No disclaimer.' },
+      { kind: 'content', text: '## How your processing runs\n\nWorth testing. No disclaimer.' },
     ];
 
     const frames = await post(PROFILE_A);

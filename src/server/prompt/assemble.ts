@@ -3,7 +3,7 @@
  * knowledge-base fragments this geometry triggers, (b) a render plan that decides what
  * gets airtime, and (c) the user message that carries both to the model.
  *
- * The selection table is the one in the implementation plan ("Layer 2 — prompt assembly
+ * The selection table is the one in the implementation plan ("Layer 2: prompt assembly
  * → Selection logic"), row for row. Three facts about the fragment build constrain it:
  *
  *  - `shapes.*` fragments have their detection and grade text stripped, so every grade
@@ -42,7 +42,7 @@ import {
   type ShapeId,
 } from '../kb/loader';
 import { MAX_COMPLETION_TOKENS } from '../deepseek';
-import { SYSTEM_PROMPT } from './system-prompt';
+import { fullSystemPrompt } from './foundations';
 
 // Extra completion tokens reserved for the model's hidden reasoning pass (thinking is on
 // by default). Billed against the same max_tokens as the report, so it is added on top of
@@ -53,7 +53,7 @@ const REASONING_HEADROOM_TOKENS = 24000;
  * Public shapes
  * ------------------------------------------------------------------ */
 
-/** The optional 5W1H intake (04 §a). Every field is optional; all-empty = absent. */
+/** The optional context intake (04 §a). Every field is optional; all-empty = absent. */
 export interface ContextAnswers {
   who?: string;
   what?: string;
@@ -71,7 +71,7 @@ export type RenderMode =
   | 'full'
   /** ~350 words, but two labelled hypotheses plus the deciding observation (05 §5.5). */
   | 'fork'
-  /** A short paragraph — fired axes beyond the most polarized one (03 §7 cap, relaxed). */
+  /** A short paragraph. Fired axes beyond the most polarized one (03 §7 cap, relaxed). */
   | 'short-paragraph'
   /** One or two hedged lines: quiet channels and the licensed composition note. */
   | 'brief'
@@ -123,7 +123,7 @@ export type ScenarioBand = 'flow' | 'stretch' | 'friction' | 'eruption-risk';
 /**
  * A hypothetical situation the report generates for itself: one row of 04 §b's demand
  * taxonomy, crossed with this profile's supply grade for the demanded function, plus a
- * compact 5W1H frame for the model to open the vignette with.
+ * compact scene description for the model to open the vignette with.
  *
  * The situation is generic and the demand mapping comes from the taxonomy; only the
  * *prediction* is profile-specific. Nothing here is personalization.
@@ -137,7 +137,7 @@ export interface Scenario {
   /** Supply grade of the row's primary demanded function, from the Signature. */
   supplyGrade: SupplyGrade;
   cues: string;
-  /** The 5W1H seed the vignette must open with (04 §a's six fields). */
+  /** The scene the vignette opens with (04 §a's six fields). */
   frame: Record<ContextField, string>;
   /** 04 §c escalation modifiers overlaid on the frame; only the eruption scenario has any. */
   modifiers: string[];
@@ -162,12 +162,12 @@ export interface Assembly {
   fragments: SelectedFragment[];
   renderPlan: RenderFeature[];
   /**
-   * The self-generated 5W1H scenarios section 3 is built from. Always populated for an
+   * The self-generated scenarios section 3 is built from. Always populated for an
    * LLM path with resolved tiers; empty for STAIRCASE (no supply grades exist) and FLAT.
    */
   scenarios: Scenario[];
   systemPrompt: string;
-  /** Empty string when `honestNull` — there is nothing to ask a model. */
+  /** Empty string when `honestNull`: there is nothing to ask a model. */
   userPrompt: string;
   /** Completion cap sized to the render plan's word budget (05 §5.1). */
   maxTokens: number;
@@ -192,7 +192,7 @@ interface TaxonomyRow {
   demands: FunctionKey[];
   cues: string;
   /**
-   * A generic 5W1H situation that produces this demand, authored from the row's own cue
+   * A generic scene situation that produces this demand, authored from the row's own cue
    * and rationale columns. Generic on purpose: the situation is a hypothetical, and only
    * the prediction about it is keyed to the profile.
    */
@@ -213,7 +213,7 @@ const TAXONOMY: readonly TaxonomyRow[] = [
     frame: {
       who: 'you, or a small group with no fixed roles',
       what: 'produce a spread of options for a problem nobody has framed yet',
-      when: 'open-ended — no clock set by anyone',
+      when: 'open-ended, no clock set by anyone',
       where: 'a setting you can reshape or step away from',
       why: 'nothing is decided yet, and breadth is the point',
       how: 'your own method; nothing is prescribed',
@@ -381,18 +381,18 @@ const TAXONOMY: readonly TaxonomyRow[] = [
  * verbatim in the friction instruction.
  */
 export const DEMAND_WEIGHTING_RULE =
-  'WHAT is the primary demand; cues appearing in multiple 5W1H fields outrank ' +
-  'single-field cues; ties break toward the demand whose function has the LOWEST supply ' +
-  'grade; cap the demand profile at four demands.';
+  'The task itself is the primary demand. Cues appearing in multiple scene fields outrank ' +
+  'single-field cues. Ties break toward the demand whose function has the LOWEST supply ' +
+  'grade. Cap the demand profile at four demands.';
 
 /**
- * 04 §c escalation modifiers, overlaid on the eruption scenario's 5W1H frame. Three of the
+ * 04 §c escalation modifiers, overlaid on the eruption scenario's scene frame. Three of the
  * five, so the "friction + >= 2 modifiers -> flag eruption risk" rule fires by construction.
  */
 const ESCALATION_OVERLAY: readonly string[] = [
-  'WHEN (sustained duration): this repeats every day for two weeks, not once',
-  'WHERE (no exit): you cannot step out of it or reshape it',
-  'WHO (evaluative audience): somebody whose opinion of you matters is watching',
+  'Sustained duration: this repeats every day for two weeks, not once',
+  'No exit: you cannot step out of it or reshape it',
+  'Evaluative audience: somebody whose opinion of you matters is watching',
 ];
 
 /**
@@ -411,16 +411,16 @@ export const REPORT_HEADINGS = [
 /**
  * Appended to every full-length feature. Implements the two halves of the length rule:
  * spend the budget on the theory the fragments carry, then on composition between fired
- * features — which no fragment states, and which is where originality is licensed.
+ * features, which no fragment states, and which is where originality is licensed.
  */
 const DEPTH_CONTRACT =
   'Depth contract for this full-length slot: render the mechanism by name, the Inside and ' +
   'Observable material, BOTH sides of the trade-off, the stress trajectory and the exit ramp ' +
-  'or lever — composed with this profile’s own functions, never as shape-generic prose. Then ' +
+  'or lever. Compose with this profile\'s own functions, never as shape-generic prose. Then ' +
   'go past the fragments: state what THIS feature together with the other fired features in ' +
   'the plan predicts that none of them predicts alone (how this person argues, decides, ' +
-  'burns out, recovers). Tag every composed reading [H] and phrase it as an offered ' +
-  'hypothesis. Every paragraph is grounded in a real feature and a real mechanism — named to yourself, described to the reader in plain everyday words with no number, grade, or code.';
+  'burns out, recovers). Phrase every composed reading as an offered hypothesis. Every ' +
+  'paragraph is grounded in a real feature and a real mechanism. Named to yourself, described to the reader in plain everyday words with no number, grade, or code.';
 
 const BUDGET: Record<RenderMode, number> = {
   full: 350,
@@ -539,13 +539,13 @@ function compositionPair(signature: Signature): FunctionKey[] {
  * 04 §b's taxonomy, crossed with this profile's supply grades so the set spans the ladder.
  *
  * Coverage contract, in this order:
- *   1. flow      — a demand this profile's lead cluster supplies
- *   2. stretch   — a demand landing in the support or reserve band
- *   3. friction  — a demand landing on the shadow floor
- *   4. eruption-risk — only when a FIRM eruption candidate exists: a second friction
+ *   1. flow:           a demand this profile's lead cluster supplies
+ *   2. stretch:        a demand landing in the support or reserve band
+ *   3. friction:       a demand landing on the shadow floor
+ *   4. eruption-risk:  only when a FIRM eruption candidate exists, a second friction
  *      scenario loading that function, with three 04 §c escalation modifiers overlaid.
  *
- * A band is skipped when this profile has nothing at that grade — a profile with no
+ * A band is skipped when this profile has nothing at that grade. A profile with no
  * friction row genuinely has no friction scenario, and inventing one would be a lie.
  */
 export function computeScenarios(signature: Signature): Scenario[] {
@@ -633,7 +633,7 @@ export function assemblePrompt(
   signature: Signature,
   /**
    * Accepted for wire compatibility and deliberately unused. The report no longer takes a
-   * situation from the reader: it generates its own 5W1H scenarios from the taxonomy and
+   * situation from the reader: it generates its own scene scenarios from the taxonomy and
    * this profile's supply grades (see `computeScenarios`). Passing a context changes
    * nothing about the output.
    */
@@ -651,7 +651,7 @@ export function assemblePrompt(
       fragments: [],
       renderPlan: [],
       scenarios: [],
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: fullSystemPrompt(),
       userPrompt: '',
       maxTokens: 0,
       budgetWords: 0,
@@ -689,7 +689,7 @@ export function assemblePrompt(
     push({
       id: 'weak-signal:staircase',
       kind: 'weak-signal',
-      title: 'Staircase geometry — extremes only',
+      title: 'Staircase geometry, extremes only',
       section: 2,
       salience: 0,
       mode: 'full',
@@ -703,7 +703,7 @@ export function assemblePrompt(
         'No adjacent rank in this profile is real: no tier boundary exists, so no tiers, ' +
           'no circuit, no shapes, no eruption candidates may be named.',
         `The ONLY licensed content is the contrast between the habits you use most (${fnList(upper)}) ` +
-          `and the ones you use least (${fnList(lower)}) — everything between them stays silent. Name ` +
+          `and the ones you use least (${fnList(lower)}). Everything between them stays silent. Name ` +
           'them in plain words; never call them "top/bottom", "high/low", or "edges".',
         'Section 3 must say plainly that behaviour-in-situation predictions need bands this ' +
           'profile does not resolve, so no scenarios are offered, and point to the 256-item ' +
@@ -715,12 +715,12 @@ export function assemblePrompt(
     selectNormal(signature, selection, push);
   }
 
-  // Table row: always-on. `dynamics.development` is the same text (03 §10) — once only.
+  // Table row: always-on. `dynamics.development` is the same text (03 §10), once only.
   selection.add('always.development');
   selection.add('always.state-honesty');
 
   /*
-   * Table rows: the friction machinery, minus `friction.intake-schema` — that fragment
+   * Table rows: the friction machinery, minus `friction.intake-schema`. That fragment
    * documents the six questions to ASK a reader, and there is no reader intake any more.
    * Not for STAIRCASE either: the friction classification reads supply grades off tiers,
    * and a staircase asserts none (they come back `unrated`), so there is nothing to grade.
@@ -735,7 +735,7 @@ export function assemblePrompt(
       {
         id: 'scenarios',
         kind: 'scenarios',
-        title: `Self-generated 5W1H scenarios (${scenarios.map((s) => s.band).join(', ')})`,
+        title: `Self-generated scenarios (${scenarios.map((s) => s.band).join(', ')})`,
         section: 3,
         salience: 58,
         mode: 'full',
@@ -744,7 +744,7 @@ export function assemblePrompt(
         mergedFrom: [],
         instructions: scenarioInstructions(scenarios),
       },
-      // Each vignette carries a 5W1H frame, three or four if-then signatures and a
+      // Each vignette carries a scene, three or four if-then signatures and a
       // trade-off line, so this section is budgeted per scenario rather than per feature.
       Math.max(380, scenarios.length * 190),
     );
@@ -754,7 +754,7 @@ export function assemblePrompt(
   push({
     id: 'provenance',
     kind: 'provenance',
-    title: 'Where this report comes from — framework provenance',
+    title: 'Where this report comes from (framework provenance)',
     section: 6,
     salience: 90,
     mode: 'full',
@@ -780,7 +780,7 @@ export function assemblePrompt(
     fragments,
     renderPlan,
     scenarios,
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: fullSystemPrompt(),
     userPrompt: buildUserPrompt({
       signature,
       scenarios,
@@ -837,7 +837,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       const marginal = candidate?.marginal ?? false;
       const instructions = [
         `${fn} sits on the shadow floor. Hold all three hypotheses for the boundary above ` +
-          'it — suppression, avoidance, simple non-development — and never pick one.',
+          'it (suppression, avoidance, simple non-development) and never pick one.',
         bridge
           ? `Route any lever through the bridge function ${bridge} (strongest function sharing ` +
             `${fn}'s attitude). The bridge is NOT the circuit counterweight; never call it one, ` +
@@ -848,15 +848,15 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         instructions.push(
           `Firm eruption candidate: describe how ${fn} shows up in a rough, clumsy form under strain, ` +
             'in plain everyday behaviour (say "it bursts out in a rough, clumsy form", never "erupts" ' +
-            'or "eruption"), plus the early-warning line — the first sign is that your usual strong ' +
+            'or "eruption"), plus the early-warning line. The first sign is that your usual strong ' +
             'habits go foggy, before any of the rough behaviour appears.',
           'Full depth (this is a capped, high-salience feature, so spend the budget): the ' +
             'repression-rebound mechanism and why the gap size matters; what systematic ' +
             'avoidance of this domain looks like day to day; the honest benefit side (not ' +
             'funding this channel frees budget for the lead); at least two early-warning signs ' +
             'the reader could notice this month; the bridge-function route with its activation ' +
-            'conditions; and boundary design — pre-arranged cover for contexts that demand ' +
-            `${fn}. Never advise developing the floor directly.`,
+            'conditions; and boundary design (pre-arranged cover for contexts that demand ' +
+            `${fn}). Never advise developing the floor directly.`,
         );
       } else {
         instructions.push(
@@ -867,7 +867,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       if (candidate?.axisPartnerElevated) {
         instructions.push(
           `${fn}'s axis partner sits in the lead cluster or an upper edge, so polarization ` +
-            'compounds the isolation — this is the strongest form of the reading.',
+            'compounds the isolation. This is the strongest form of the reading.',
         );
       }
 
@@ -875,8 +875,8 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         id: `floor:${fn}`,
         kind: firm ? 'shadow-cliff' : 'eruption-watch',
         title: firm
-          ? `${fn} shadow floor below a cliff — firm eruption candidate`
-          : `${fn} shadow floor below a gap — hedged watch item`,
+          ? `${fn} shadow floor below a cliff, firm eruption candidate`
+          : `${fn} shadow floor below a gap, hedged watch item`,
         section: 4,
         salience: firm ? 10 : 48,
         mode: firm ? (marginal ? 'fork' : 'full') : 'brief',
@@ -892,7 +892,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       push({
         id: 'floor:summary',
         kind: 'eruption-summary',
-        title: 'Remaining floor members — one summary line',
+        title: 'Remaining floor members, one summary line',
         section: 4,
         salience: 49,
         mode: 'summary-line',
@@ -929,14 +929,14 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         `Private evidence, never print: the loop reads ${circuit.grade} (strength ${circuit.strength}); its ` +
           `members are ${fnList(circuit.lead)} and the way back in is ${circuit.counterweight}. In the report, ` +
           `describe two habits that team up and crowd the others out, name each habit in ` +
-          `everyday words, and call ${circuit.counterweight} a gentle way back toward balance — no number, no ` +
+          `everyday words, and call ${circuit.counterweight} a gentle way back toward balance. No number, no ` +
           `grade word, no code, and never the words "circuit", "counterweight", "closed loop" or "loop".`,
         `Compose the variant from ${pair.join('/')} using those functions' own blocks (rule of ` +
           'composition): if that pair matches one of the named composition variants use it, ' +
           'otherwise build the variant from these two functions. Never ship shape-generic prose.',
         `Name the counterweight's activation conditions in its own currency, in section 5.`,
         circuit.fromSmearedLead
-          ? 'The lead was read off a smeared top segment’s upper edge — say that the reading rests on it.'
+          ? 'The lead was read off a smeared top segment\'s upper edge. Say that the reading rests on it.'
           : 'Do not order the lead members if there is more than one; they are a set.',
       ],
     });
@@ -946,7 +946,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
     push({
       id: 'balanced-lead',
       kind: 'balanced-lead',
-      title: 'Attitude-balanced lead — no circuit fires',
+      title: 'Attitude-balanced lead, no circuit fires',
       section: 2,
       salience: 42,
       mode: 'full',
@@ -955,7 +955,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       mergedFrom: [],
       instructions: [
         `The lead (${fnList(signature.operativeLead)}) carries both attitudes, so no circuit ` +
-          'reading is available — mutually exclusive by construction. Never name a counterweight.',
+          'reading is available. Mutually exclusive by construction. Never name a counterweight.',
         'Balance is not praise: name the switching overhead and the genuine indecision under ' +
           'time pressure, and give the behavioral tell (the same decision re-made once in each ' +
           'channel within days), not a felt sense.',
@@ -986,19 +986,19 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       functions: [leadFn],
       mergedFrom: [],
       instructions: [
-        `Private evidence, never print: the lead reads ${String(s1.grade)}, standing ${String(s1.detail.gap)} above the next habit. Translate that into how strongly one habit leads — "clearly out in front" vs "only just ahead" — with no number and no grade word.`,
+        `Private evidence, never print: the lead reads ${String(s1.grade)}, standing ${String(s1.detail.gap)} above the next habit. Translate that into how strongly one habit leads ("clearly out in front" vs "only just ahead") with no number and no grade word.`,
         s1.marginal
-          ? 'Marginal: render as a fork — (A) a single lead feeding the band below it, (B) no ' +
-            'true lead but a wider working cluster — plus the observation that decides it. ' +
+          ? 'Marginal: render as a fork. (A) a single lead feeding the band below it, (B) no ' +
+            'true lead but a wider working cluster. Plus the observation that decides it. ' +
             'One-sided rendering here is a generation error.'
           : 'Firm enough to state as a pattern, still as a hypothesis to test.',
         overEngaged
           ? `The ${axisLabel(axis.axis)} axis is ${axis.class}, which licenses ${leadFn}'s ` +
             'over-engaged block: pair the engaged reading with its over-engaged cost.'
           : `The ${axisLabel(axis.axis)} axis is ${axis.class}, so the over-engaged reading is NOT ` +
-            'licensed — engaged expression only.',
+            'licensed. Engaged expression only.',
         'The geometry shows over-reliance, not talent. A spike over a strong band is resilient; ' +
-          'a spike over a desert is brittle — say which this is.',
+          'a spike over a desert is brittle. Say which this is.',
       ],
     });
   }
@@ -1023,13 +1023,13 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       functions: [...shape.members],
       mergedFrom: [],
       instructions: [
-        `Members are a set: ${fnList(shape.members)} — too close to tell apart, treat ` +
+        `Members are a set: ${fnList(shape.members)}. Too close to tell apart, treat ` +
           'them as roughly equal, with no clear front-runner, never rank or adjective-rank them.',
         'Hold both hypotheses at once: deliberative flexibility versus decision friction. The ' +
           'flattering read never ships without the friction read.',
         shape.variant
           ? `Composition variant from the Signature: ${shape.variant}.`
-          : 'Compose from the members’ own blocks, not from generic cluster prose.',
+          : 'Compose from the members\' own blocks, not from generic cluster prose.',
       ],
     });
   }
@@ -1053,7 +1053,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         `Never call ${fnList(s3b.members)} a lead cluster. Membership rests on a marginal ` +
           `boundary and edge windows (source: ${String(s3b.detail.source)}, span ${String(s3b.detail.span)}), ` +
           'so the whole reading is watch-item grade and must be a fork.',
-        'Order is unknown — the members are a set, interpreted through their supporting blocks.',
+        'Order is unknown. The members are a set, interpreted through their supporting blocks.',
       ],
     });
   }
@@ -1094,7 +1094,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
           `(${fnList(s8.detail.highGroup as FunctionKey[])}) and the ones you rarely turn to ` +
           `(${fnList(s8.detail.lowGroup as FunctionKey[])}), with little in between. In the report, ` +
           'name each habit in plain words and describe "the ones you lean on" versus "the ones you ' +
-          'rarely reach for" — never "high group", "low group", "top", "bottom", or "shadow floor". ' +
+          'rarely reach for". Never "high group", "low group", "top", "bottom", or "shadow floor". ' +
           'The rarely-used ones are the habits that can burst out roughly under strain; keep to two.',
       ],
     });
@@ -1114,7 +1114,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
   let axisRenderedInFull = false;
   for (const axisKey of polarizedAxes) {
     const axis = signature.indices.axes[axisKey];
-    const perAxisLine = `in plain everyday words, ${axis.high} is the far stronger side and ${axis.low} the neglected one — say what each habit is; never print a code, an arrow, or a number`;
+    const perAxisLine = `in plain everyday words, ${axis.high} is the far stronger side and ${axis.low} the neglected one. Say what each habit is. Never print a code, an arrow, or a number`;
     // Convergence merging: a polarized axis whose low pole is also an eruption candidate
     // is ONE feature, reported once and strongly, never twice (03 §7).
     const converged = floorFeatures.get(axis.low);
@@ -1123,12 +1123,12 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       converged.axis = axisKey;
       converged.mergedFrom.push(`axis:${axisKey}`, converged.id);
       converged.salience = Math.min(converged.salience, axis.class === 'extreme' ? 30 : 35);
-      converged.title = `${converged.title} — convergent with the ${axisLabel(axisKey)} ${axis.class} axis (${axis.pol})`;
+      converged.title = `${converged.title}, convergent with the ${axisLabel(axisKey)} ${axis.class} axis (${axis.pol})`;
       converged.functions = [...new Set([...converged.functions, axis.high, axis.low])];
       converged.instructions.push(
         `Convergent detection (private): the ${axisLabel(axisKey)} pair is ${axis.class}, and ` +
-          `its low side is this least-used habit. Report the two as ONE reading, once and strongly ` +
-          `— never as two separate findings. Say it in plain words: ${perAxisLine}.`,
+          `its low side is this least-used habit. Report the two as ONE reading, once and strongly. ` +
+          `Never as two separate findings. Say it in plain words: ${perAxisLine}.`,
         `Attach the cost to the very same lopsidedness that buys the strength, in plain words: ` +
           `the same strong lean toward ${axis.high} and away from ${axis.low} that gives its power ` +
           `is what costs on the other side. Name both sides in everyday words; never print a number.`,
@@ -1140,7 +1140,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         if (converged.kind === 'eruption-watch') {
           converged.instructions.push(
             'The axis half of this feature carries the full treatment; the floor half stays one ' +
-              'hedged watch line inside it — a gap, not a cliff, licenses nothing firmer.',
+              'hedged watch line inside it. A gap, not a cliff, licenses nothing firmer.',
           );
         }
       } else {
@@ -1168,7 +1168,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       mergedFrom: [],
       instructions: full
         ? [
-            `Most polarized axis — the one rendered in full. Say it in plain words: ${perAxisLine}.`,
+            `Most polarized axis, the one rendered in full. Say it in plain words: ${perAxisLine}.`,
             `Leaning hard on one side is specialization: name in plain words the strength on the ` +
               `${axis.high} side and the blind spot on the ${axis.low} side, tied to that same one lean.`,
             'Full depth: the contrarian-influence mechanism (the disowned pole still shapes the ' +
@@ -1177,12 +1177,12 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
               'the only licensed exit, and what fluent handling of the low pole would falsify.',
             axis.borderline
               ? 'Borderline past its threshold: render as a fork, not a firm pattern.'
-              : 'The starved pole is repressed rather than absent — it still shapes the worldview ' +
+              : 'The starved pole is repressed rather than absent. It still shapes the worldview ' +
                 'through what gets disowned or defined as unimportant.',
           ]
         : [
             `Rendering cap, relaxed for the comprehensive format: a SHORT PARAGRAPH (not one ` +
-              `sentence, not a full treatment — the ${axisLabel(polarizedAxes[0]!)} axis already ` +
+              `sentence, not a full treatment; the ${axisLabel(polarizedAxes[0]!)} axis already ` +
               `took that). Say it in plain words: ${perAxisLine}. Name the mechanism and one ` +
               'observable marker, and stop.',
           ],
@@ -1210,13 +1210,13 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         index === 0
           ? [
               'The one balanced-high fork allowed: flexible switching OR unresolved tension. ' +
-                'Adjudicate with behavioral markers — a stable context-keyed assignment versus ' +
-                'observable re-decision — never with a felt sense of being torn.',
+                'Adjudicate with behavioral markers: a stable context-keyed assignment versus ' +
+                'observable re-decision. Never with a felt sense of being torn.',
               `The two poles (${fnList(axis.members)}) are within the noise band: too close to ` +
                 'tell apart, treat them as roughly equal, with no clear front-runner.',
             ]
           : [
-              'Beyond the one-fork cap: a short paragraph at most, and no second fork — ' +
+              'Beyond the one-fork cap: a short paragraph at most, and no second fork. ' +
                 'name the mechanism and one behavioral marker, then stop.',
             ],
     });
@@ -1232,7 +1232,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       push({
         id: `axis:${axisKey}`,
         kind: 'quiet-axis',
-        title: `${axisLabel(axisKey)} balanced-low (${axis.pol}) — quiet channel`,
+        title: `${axisLabel(axisKey)} balanced-low (${axis.pol}), quiet channel`,
         section: 2,
         salience: 65,
         mode: 'brief',
@@ -1242,10 +1242,10 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         mergedFrom: [],
         instructions: [
           `Quiet pair: one or two plain lines, then stop. Both of these two opposite habits ` +
-            `(${fnList(axis.members)}) are ones you rarely lean on right now — say so gently and ` +
+            `(${fnList(axis.members)}) are ones you rarely lean on right now. Say so gently and ` +
             `move on. This is not a fault or a verdict about ability. Name the two habits in plain ` +
             `words; never call this "low", a "quiet channel", or "balanced-low", and attach no ` +
-            `number. The two are too close to tell apart — treat them as roughly equal, with no clear front-runner.`,
+            `number. The two are too close to tell apart. Treat them as roughly equal, with no clear front-runner.`,
         ],
       });
     }
@@ -1274,7 +1274,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
           "settling things than into gathering what is around you'); never label it 'judging vs " +
           "perceiving', 'deciding vs taking in', or an 'inward/outward side'.",
         lever
-          ? `Starved-side lever: ${lever} — the strongest ${jp.starvedSide} function. Name its ` +
+          ? `Starved-side lever: ${lever}, the strongest ${jp.starvedSide} function. Name its ` +
             'activation conditions in section 5 (intake rituals before decisions, or artificial ' +
             'closure devices), never a personality prescription.'
           : 'No starved-side lever is computable; say so rather than inventing one.',
@@ -1285,7 +1285,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
     push({
       id: 'jp-note',
       kind: 'jp-note',
-      title: 'Mixed active set — one hedged composition note',
+      title: 'Mixed active set, one hedged composition note',
       section: 2,
       salience: 66,
       mode: 'brief',
@@ -1333,34 +1333,32 @@ function orderPlan(features: RenderFeature[]): RenderFeature[] {
  */
 function provenanceInstructions(): string[] {
   return [
-    '300–500 words. This section makes NO claim about the person: it explains where the ' +
-      'framework comes from and what was done to it. No geometry numbers, no predictions.',
-    'Sources [D]: the Mindstack knowledge base generalizes ideas from four ' +
-      'mbti-notes.tumblr.com guides — Type Fundamentals, Function Theory, Type Development, ' +
-      'Type Spotting — and from Naomi Quenk’s "grip" concept. Typology-community writing: ' +
-      'attributed, and unvalidated. Say "unvalidated" plainly.',
-    'The key move [H]: those sources describe "loops" and "grips" as engagement states ' +
-      'inside 16 fixed function stacks. Mindstack re-keys the same mechanics onto the ' +
-      'person’s measured score geometry — tiers derived from the gaps between scores, not ' +
-      'from fixed stack positions — because real measured profiles almost never match one of ' +
-      'the 16 canonical stacks (only 16 of 40,320 possible orderings are canonical). This ' +
-      're-keying is Mindstack’s own speculative move, not something the sources say.',
-    'Why no type label is given: continuous scores carry more information than 16 boxes, and ' +
-      'peer-reviewed work rejected fixed stack order (Reynierse 2009) [S].',
-    'What is actually well grounded [S]: the situational layer. Behavior follows if-then ' +
-      'situation-behavior signatures (Mischel & Shoda 1995), and people occupy distributions ' +
-      'of states rather than fixed essences (Fleeson 2001). The if-then FORM is science; ' +
-      'every situation-to-function mapping in this report is Mindstack’s own hypothesis [H].',
-    'One honest line about the input: the eight scores come from an unvalidated hobbyist ' +
-      'questionnaire, and results commonly change on retake.',
-    'Plain language, sixth-grade level, even here. Keep sentences short (under 20 words) and ' +
-      'words common. Avoid engine words like "pipeline", "framework", "instrument", "input" and ' +
-      '"validity evidence"; say "this tool", "this method", "the quiz", "proof it works". You may ' +
-      'name the sources and dates as plain facts about the method. Do NOT say "your scores" or that ' +
-      'habits are "ranked"; say "your answers", "your results", or "your habits". (The final ' +
-      'disclaimer block is fixed word-for-word — reproduce it exactly as given, even though it says ' +
-      '"scores".) Keep the epistemic tiers audible here too — this section is where a reader learns ' +
-      'which parts of the report are science and which are ours, so laundering here would be the worst place for it.',
+    '300-500 words. This section says nothing about the person. It explains where ' +
+      'the method comes from and what we did with it. No numbers, no predictions.',
+    'Sources (community ideas): we took ideas from four guides on ' +
+      'mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, ' +
+      'Type Spotting) and from Naomi Quenk\'s "grip" idea. These are personality-community ' +
+      'writing. They have never been tested by science. Say that plainly.',
+    'What we changed (our guess): those sources tie their patterns to 16 fixed types. ' +
+      'We kept the patterns but read them from the person\'s quiz scores instead. We look ' +
+      'at the gaps between scores, and we ignore the fixed type order. Real quiz results ' +
+      'almost never match one of the 16 classic orders (only 16 out of 40,320 possible ' +
+      'orders are "classic"). This change is our own guess. It has never been tested.',
+    'Why we give no type label: eight separate scores tell more than 16 boxes. Published ' +
+      'research rejected fixed function order (Reynierse 2009). A type label would be a ' +
+      'claim we cannot back up.',
+    'What rests on real science: the "if this situation, then this response" idea comes ' +
+      'from Mischel and Shoda (1995). The finding that people move through many states ' +
+      'comes from Fleeson (2001). The if-then shape is real science. Every guess about ' +
+      'which habit fits which situation is still ours.',
+    'Be honest about the input: the eight scores come from a hobby quiz that has never ' +
+      'been tested for accuracy. People often get different results on retake.',
+    'Use the simplest words possible. Keep sentences under 15 words. ' +
+      'Say "this tool" or "this method" or "the quiz," never "pipeline" or "framework" or ' +
+      '"instrument" or "validity evidence." Say "your answers" or "your results," never ' +
+      '"your scores" or "ranked." The disclaimer block at the end is fixed. Copy it ' +
+      'exactly as given. Keep confidence levels clear here too. This section is where the ' +
+      'reader learns which parts are science and which are our guesses.',
   ];
 }
 
@@ -1376,17 +1374,18 @@ function scenarioInstructions(scenarios: readonly Scenario[]): string[] {
   const instructions: string[] = [
     `Render ALL ${scenarios.length} scenarios below, each as its own vignette, in this order. ` +
       'Add no scenario and drop none.',
-    'Open every vignette with an explicit, compact 5W1H frame — Who / What / When / Where / ' +
-      'Why / How, one short line each, or woven into two tight sentences that visibly cover ' +
-      'all six. The frame given for each scenario is the seed: keep its substance, and you ' +
-      'may add concrete everyday texture to make it feel like a real situation (that texture ' +
-      'is invented, so tag the vignette [H]).',
+    'Open every vignette by setting the scene naturally. Paint the situation so the reader ' +
+      'can picture who is there, what needs doing, when and where it happens, why it matters, ' +
+      'and how the person has to handle it. Weave all of this into two or three tight sentences. ' +
+      'Do not use labels like "Who", "What", "When". The scene given for each scenario is the ' +
+      'seed: keep its substance. You may add concrete everyday texture to make it feel like a ' +
+      'real situation (that texture is invented, so phrase it as a guess).',
     'Then, for each scenario, THREE TO FOUR if-then signatures in the canonical template: ' +
-      '"When [5W1H feature], you likely [observable prediction]; if instead you find ' +
+      '"When [situation detail], you likely [observable prediction]; if instead you find ' +
       '[counter-observation], that would tell us [revision]." No falsifier, no signature. ' +
       'Vary what the signatures read: the demand itself, the workaround substitution it ' +
       'invites, the modifiers stacked on it, and what it bills afterwards.',
-    'Then close each scenario with one trade-off line — what this situation costs this ' +
+    'Then close each scenario with one trade-off line. What this situation costs this ' +
       'profile, attached to the same feature that makes it easy or hard.',
     'One honest line for the section, in your own words: these situations are hypothetical ' +
       'and were built from the profile itself, so the reader should test them against real ' +
@@ -1394,7 +1393,7 @@ function scenarioInstructions(scenarios: readonly Scenario[]): string[] {
       'were personalised, and do not pretend the reader described any situation.',
     'Each scenario is a DIFFERENT supply grade on purpose, so the vignettes must read ' +
       'differently: flow, stretch and friction predict different failures. A flow verdict is ' +
-      'not praise — name what that situation is NOT exercising.',
+      'not praise. Name what that situation is NOT exercising.',
     `Demand weighting, a PRIVATE procedure for choosing what each scenario demands ` +
       `(hardcoded rule, follow exactly; never mention weighting, grades, or any of this to the reader): ${DEMAND_WEIGHTING_RULE}`,
     'The demand-to-function mapping comes from the taxonomy fragment; the supply grade comes ' +
@@ -1406,21 +1405,26 @@ function scenarioInstructions(scenarios: readonly Scenario[]): string[] {
   ];
 
   for (const scenario of scenarios) {
-    const frame = CONTEXT_FIELDS.map(
-      (field) => `${field.toUpperCase()}: ${scenario.frame[field]}`,
-    ).join(' | ');
+    const scene = [
+      `People: ${scenario.frame.who}`,
+      `Task: ${scenario.frame.what}`,
+      `Timing: ${scenario.frame.when}`,
+      `Setting: ${scenario.frame.where}`,
+      `Stakes: ${scenario.frame.why}`,
+      `Approach: ${scenario.frame.how}`,
+    ].join('. ');
     const line =
-      `SCENARIO ${scenario.band.toUpperCase()} (all of this is PRIVATE — translate to plain words, ` +
+      `SCENARIO ${scenario.band.toUpperCase()} (all of this is PRIVATE, translate to plain words, ` +
       `print none of it): ${scenario.demandType}; demands ${fnList(scenario.demands)}; supply grade of ` +
-      `${scenario.demands[0]}: ${scenario.supplyGrade} (say how it FEELS, never the grade word). 5W1H seed — ${frame}`;
+      `${scenario.demands[0]}: ${scenario.supplyGrade} (say how it FEELS, never the grade word). Scene: ${scene}`;
     instructions.push(line);
     if (scenario.band === 'eruption-risk' && scenario.eruptionFn) {
       instructions.push(
-        `  ...and overlay these escalation modifiers on that frame: ${scenario.modifiers.join('; ')}. ` +
+        `  ...and overlay these escalation modifiers on that scene: ${scenario.modifiers.join('; ')}. ` +
           `That is three modifiers on a friction demand, so eruption risk is FLAGGED for ` +
           `${scenario.eruptionFn}: predict its crude form under depletion, name the ` +
           'early-warning sign to watch for first (the loss of ordinary lead-function quality, ' +
-          'before any of the crude behaviour), and keep it hedged — this is a generalized ' +
+          'before any of the crude behaviour), and keep it hedged. This is a generalized ' +
           'community concept, not a finding.',
       );
     }
@@ -1442,43 +1446,36 @@ function scenarioInstructions(scenarios: readonly Scenario[]): string[] {
  * passes `auditReport` unchanged.
  */
 export const FRAMEWORK_PROVENANCE_TEXT = [
-  'This report is built on a small knowledge base that we wrote ourselves, from a mix of ' +
-    'sources of very different quality. It is worth knowing which is which.',
+  'We built this report from a small set of sources. Some are strong. Some are not. Here is what comes from where.',
   '',
-  'Most of the interpretive ideas come from typology-community writing: four guides ' +
-    'published on mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type ' +
-    'Development and Type Spotting) and Naomi Quenk’s idea of the "grip". We name these ' +
-    'sources because they deserve the credit, but they are unvalidated. No peer-reviewed ' +
-    'research supports them, even in their original form.',
+  'Most of the ideas come from personality-community writing. Four guides on ' +
+    'mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, ' +
+    'Type Spotting) and Naomi Quenk\'s idea of the "grip." These writers deserve credit. ' +
+    'But none of this has been tested by science.',
   '',
-  'Those sources describe two patterns they call "loops" and "grips". Both are really ' +
-    'patterns of *engagement*: which mental habits get used together, which get avoided, and ' +
-    'which break out when a person is tired. In the original writing, those patterns live ' +
-    'inside 16 fixed stacks — a set order of functions for each of the 16 types.',
+  'Those sources describe patterns they call "loops" and "grips." These are about which ' +
+    'mental habits you use together, which you avoid, and which come out when you are tired. ' +
+    'The original sources tie these patterns to 16 fixed types.',
   '',
-  'Our own move, and the speculative part, is this: we keep the engagement patterns but stop ' +
-    'reading them off a fixed stack. Instead we read them off your measured scores. Bands ' +
-    'come from the gaps between your numbers, not from a position in a list. We do this ' +
-    'because real measured profiles almost never match one of the 16 canonical orders — only ' +
-    '16 of the 40,320 possible orderings are canonical, so a fixed stack is the wrong shape ' +
-    'for real data. This re-keying is ours, it is a hypothesis, and it has never been tested.',
+  'We did something different. We kept the patterns but stopped tying them to fixed types. ' +
+    'Instead, we read them from your quiz scores. We look at the gaps between your numbers. ' +
+    'We do this because real scores almost never match one of the 16 fixed orders. There are ' +
+    '40,320 possible orders, and only 16 are the "classic" ones. This change is our own ' +
+    'guess. It has never been tested.',
   '',
-  'That is also why you get no four-letter label here. Eight continuous scores carry more ' +
-    'information than 16 boxes, and putting you in a box throws that information away. ' +
-    'Peer-reviewed work has also rejected the idea of a fixed function order (Reynierse, ' +
-    '2009), so a label would add a claim we cannot support.',
+  'That is also why we give you no four-letter type label. Eight separate scores tell us ' +
+    'more than one box out of 16. Published research also rejected the idea of a fixed ' +
+    'order (Reynierse, 2009). A type label would be a claim we cannot back up.',
   '',
-  'One layer of this report does rest on real science. The idea that behaviour follows ' +
-    '"if-then" patterns — in this situation, this response — comes from Mischel and Shoda ' +
-    '(1995). The finding that a person moves through a whole range of states, rather than ' +
-    'sitting at one fixed point, comes from Fleeson (2001). That is why this report does not ' +
-    'describe you in general. It builds specific situations instead, and predicts how you ' +
-    'would tend to behave in each one. The if-then *form* is well supported; every guess ' +
-    'about which situation demands which mental habit is still ours.',
+  'One part of this report does rest on real science. The idea that people act in ' +
+    '"if this situation, then this response" patterns comes from Mischel and Shoda (1995). ' +
+    'The finding that people move through many states, not just one fixed personality, comes ' +
+    'from Fleeson (2001). That is why this report does not describe you in general. It ' +
+    'builds specific situations and guesses how you would act in each one. The "if-then" ' +
+    'shape is real science. Every guess about which habit fits which situation is still ours.',
   '',
-  'Finally, the input: your eight scores come from an unvalidated hobbyist questionnaire. It ' +
-    'has no published reliability data, and people commonly get different results when they ' +
-    'take it again.',
+  'Last: your eight scores come from a hobby quiz with no published proof that it works. ' +
+    'People often get different results when they take it again.',
 ].join('\n');
 
 /**
@@ -1508,35 +1505,33 @@ export function buildHonestNullReport(signature: Signature): string {
     '',
     REPORT_HEADINGS[5],
     '',
-    'Your eight answers came out very close together — so close that the small differences ' +
-      'between them are inside the range this quiz cannot tell apart. Your profile is too flat ' +
-      'for this instrument to resolve structure. Most of what any report could tell you here ' +
-      'would be true of nearly anyone, so we will not say it.',
+    'Your eight answers came out very close together. The differences between them are too ' +
+      'small for this quiz to read clearly. We cannot write a useful report from these results. ' +
+      'Anything we said would be true of almost anyone.',
     '',
-    'That means we cannot point to one habit you lean on most, a group you fall back on, a ' +
-      'habit you avoid, or any push-and-pull between them: every one of those readings needs ' +
-      'clearer differences than your answers show. A flat result is often a weak measurement ' +
-      'rather than a rich mind, and three readings stay equally live — you may genuinely shift ' +
-      'with the situation, you may have answered near the middle throughout, or you may simply ' +
-      'not have engaged much with the quiz that day. Nothing here says anything about your ' +
-      'ability, your mental health, or your worth.',
+    'We cannot say which habit you lean on most, which ones work together, or which one you ' +
+      'avoid. All of those readings need bigger differences than your answers show. A flat ' +
+      'result usually means the quiz did a poor job, and three explanations are equally ' +
+      'possible: you may truly shift with the situation, you may have answered near the middle ' +
+      'each time, or you may have rushed through the quiz that day. This says nothing about ' +
+      'your ability, your mental health, or your worth.',
     '',
   ];
 
   if (watch) {
     lines.push(
-      `The one thing worth a gentle note: the biggest single step between any two of your ` +
-        `answers is ${PLAIN[watch.above]} sitting just above ${PLAIN[watch.below]}. That is a ` +
-        'watch item, not a tier boundary — if you take the quiz again and this step grows, it ' +
-        'would be the first thing to look at.',
+      `One small thing worth noting: the biggest gap between any two of your answers is ` +
+        `${PLAIN[watch.above]} sitting just above ${PLAIN[watch.below]}. This is a small ` +
+        'hint, and it could just be noise. If you take the quiz again and this gap gets ' +
+        'bigger, it would be worth a closer look.',
       '',
     );
   }
 
   lines.push(
-    'What would help: take the quiz again on a different day, or try the longer, more detailed ' +
-      '256-item Sakinorva Domains Test, which can pick up smaller differences. Either gives a ' +
-      'better chance of a profile with real shape to read.',
+    'What might help: take the quiz again on a different day. Or try the longer Sakinorva ' +
+      'Domains Test (256 questions), which can pick up smaller differences. Either one gives ' +
+      'a better chance of getting results with a clear shape.',
     '',
     `> ${getDisclaimer()}`,
     '',
@@ -1559,11 +1554,11 @@ interface UserPromptInput {
 }
 
 const GROUP_TITLES: Record<SelectedFragment['group'], string> = {
-  shapes: 'Shapes (02 §4 hypotheses — detection and grades stripped; grades come from the Signature above)',
-  dynamics: 'Dynamics (03 — shape skeletons; compose them with the functions named in the render plan)',
-  functions: 'Functions (01 — per-function engagement states)',
-  friction: 'Friction machinery (04 §b–§d — the intake schema is omitted: there is no reader intake)',
-  always: 'Always on (03 §10, 04 §f — these frame every other section)',
+  shapes: 'Shapes (02 §4 hypotheses, detection and grades stripped; grades come from the Signature above)',
+  dynamics: 'Dynamics (03, shape skeletons; compose them with the functions named in the render plan)',
+  functions: 'Functions (01, per-function engagement states)',
+  friction: 'Friction machinery (04 §b-§d, the intake schema is omitted: there is no reader intake)',
+  always: 'Always on (03 §10, 04 §f, these frame every other section)',
 };
 
 function buildUserPrompt(input: UserPromptInput): string {
@@ -1574,7 +1569,7 @@ function buildUserPrompt(input: UserPromptInput): string {
   out.push('# 1. STACK SIGNATURE (computed, authoritative)');
   out.push('');
   out.push(
-    'All geometry is here. Treat every number, grade, and code as PRIVATE EVIDENCE for your reasoning only — never print, quote, or cite any of it in the report; translate each into plain everyday words (Rule 0.5). Never re-derive a number and never rank functions that sit inside a tie.',
+    'All geometry is here. Treat every number, grade, and code as PRIVATE EVIDENCE for your reasoning only; never print, quote, or cite any of it in the report. Translate each into plain everyday words (Rule 0.5). Never re-derive a number and never rank functions that sit inside a tie.',
   );
   out.push('');
   out.push('```json');
@@ -1582,10 +1577,10 @@ function buildUserPrompt(input: UserPromptInput): string {
   out.push('```');
   out.push('');
 
-  out.push('# 2. RAW SCORES AND GENERATED SCENARIOS (all PRIVATE — never printed to the reader)');
+  out.push('# 2. RAW SCORES AND GENERATED SCENARIOS (all PRIVATE, never printed to the reader)');
   out.push('');
   out.push(
-    'Scores as entered, never clamped or normalized (PRIVATE EVIDENCE — never print or cite a number): ' +
+    'Scores as entered, never clamped or normalized (PRIVATE EVIDENCE, never print or cite a number): ' +
       inputOrder(signature.scores)
         .map((fn) => `${fn} ${signature.scores[fn]}`)
         .join(' · '),
@@ -1601,22 +1596,25 @@ function buildUserPrompt(input: UserPromptInput): string {
     out.push(
       `Section 3 asks one question: if a certain situation, how does this person tend to ` +
         `behave? The report supplies the situations itself. These ${scenarios.length} were ` +
-        'computed by crossing the demand taxonomy with this profile’s supply grades, so the ' +
-        'set spans the ladder on purpose. Everything in the list below — the demands, the supply ' +
-        'grades, the row labels — is PRIVATE evidence: translate it into how each situation is ' +
+        'computed by crossing the demand taxonomy with this profile\'s supply grades, so the ' +
+        'set spans the ladder on purpose. Everything in the list below (the demands, the supply ' +
+        'grades, the row labels) is PRIVATE evidence: translate it into how each situation is ' +
         'likely to FEEL, name every habit in everyday words, and print none of the labels, grades, ' +
         'or codes:',
     );
     out.push('');
     for (const scenario of scenarios) {
       out.push(
-        `- ${scenario.band} (private) — ${scenario.demandType}; ` +
+        `- ${scenario.band} (private), ${scenario.demandType}; ` +
           `demands ${fnList(scenario.demands)}; supply grade of ${scenario.demands[0]}: ` +
           `${scenario.supplyGrade} (translate to a feeling-word; never print it).`,
       );
-      for (const field of CONTEXT_FIELDS) {
-        out.push(`    - ${field.toUpperCase()}: ${scenario.frame[field]}`);
-      }
+      out.push(`    - People: ${scenario.frame.who}`);
+      out.push(`    - Task: ${scenario.frame.what}`);
+      out.push(`    - Timing: ${scenario.frame.when}`);
+      out.push(`    - Setting: ${scenario.frame.where}`);
+      out.push(`    - Stakes: ${scenario.frame.why}`);
+      out.push(`    - Approach: ${scenario.frame.how}`);
       if (scenario.modifiers.length > 0) {
         out.push(`    - ESCALATION OVERLAY: ${scenario.modifiers.join('; ')}`);
       }
@@ -1634,7 +1632,7 @@ function buildUserPrompt(input: UserPromptInput): string {
   }
   out.push('');
 
-  out.push('# 3. RENDER PLAN (computed — the airtime allocation)');
+  out.push('# 3. RENDER PLAN (computed, the airtime allocation)');
   out.push('');
   out.push(
     'Ordered by salience. Render every feature, in the section named, at roughly its word ' +
@@ -1648,11 +1646,11 @@ function buildUserPrompt(input: UserPromptInput): string {
   if (minWords > 0) {
     out.push(
       `**Length contract: HARD MINIMUM ${minWords} words. Target: this plan's own total, ` +
-        `~${budgetWords} words — a typical resolved profile lands in ` +
+        `~${budgetWords} words. A typical resolved profile lands in ` +
         `${TARGET_REPORT_WORDS[0]}–${TARGET_REPORT_WORDS[1]}.** This profile resolves real ` +
         'structure, so a short report would waste it. Buy the length with depth on the ' +
         'features below and with composition between them (Rule 0 and the inventiveness ' +
-        'license in your instructions) — never with generic prose, never with a feature this ' +
+        'license in your instructions). Never with generic prose, never with a feature this ' +
         'plan does not list.',
     );
   } else {
@@ -1675,7 +1673,7 @@ function buildUserPrompt(input: UserPromptInput): string {
   out.push('');
   renderPlan.forEach((feature, index) => {
     out.push(
-      `${index + 1}. **${feature.title}** — section ${feature.section} · mode: ${feature.mode} · ` +
+      `${index + 1}. **${feature.title}**, section ${feature.section} · mode: ${feature.mode} · ` +
         `budget ~${feature.budgetWords} words${feature.forkRequired ? ' · FORK REQUIRED (render as a fork statement)' : ''}` +
         `${feature.mergedFrom.length > 0 ? ' · MERGED convergent detection: render once, not twice' : ''}`,
     );
@@ -1709,10 +1707,10 @@ function buildUserPrompt(input: UserPromptInput): string {
   for (const heading of REPORT_HEADINGS) out.push(`- \`${heading}\``);
   out.push('');
   out.push(
-    'Obey the render plan’s ordering, modes and word budgets. Ground every paragraph in a ' +
+    'Obey the render plan\'s ordering, modes and word budgets. Ground every paragraph in a ' +
       'named feature of the Signature plus a named mechanism (Rule 0), and compose the fired ' +
-      'features into readings no single fragment states — tagged [H]. Keep every epistemic tier ' +
-      'audible. Print no number, score, grade, or two-letter habit code anywhere in the report, ' +
+      'features into readings no single fragment states. Phrase those composed readings as guesses. ' +
+      'Keep every confidence level audible. Print no number, score, grade, or two-letter habit code anywhere in the report, ' +
       'and name every mental habit with its everyday words (Rule 0.5). End the report with this ' +
       'disclaimer block, reproduced verbatim as a markdown blockquote, and write nothing after it:',
   );

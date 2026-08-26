@@ -1,30 +1,36 @@
 /**
- * The "Model thinking" panel: a live, collapsible view of the model's raw
- * reasoning (the `thinking` SSE event), shown while the report is generated.
+ * The live reasoning window.
  *
- * This is scratch work, not the report. It is never run through the honesty
- * gates, so it must never be mistaken for report content - hence the loud
- * notice, the deliberately different (dim, monospace, boxed) styling, and the
- * auto-collapse the instant real report content starts arriving.
+ * The model's raw private reasoning, shown while it works. It is never audited,
+ * never part of the report, and deliberately styled unlike one: a drifting
+ * murmur of the last few dozen words in a serif italic, fading at both edges.
+ * It is a sign of life rather than something to read closely.
  *
- * Two halves:
- *  - createThinkingModel(): a pure state machine - accumulate deltas, escape
- *    them once each (never re-escaping the whole buffer), decide the streaming
- *    status line and the one-time auto-collapse. Fully unit-testable with no DOM.
- *  - createThinkingPanel(): the thin DOM shell that reflects the model, appending
- *    escaped deltas incrementally so a multi-thousand-token reasoning stream
- *    stays O(total), not O(n^2).
+ * The panel is always open. Its header is a slot that ReportView fills with the
+ * live status line ("The model is thinking… 12s"), so the status and the stream
+ * are one object instead of two that say the same thing.
+ *
+ * createThinkingModel below is the pure, testable half: buffering and escaping,
+ * with no DOM. Escaping happens per delta, which is safe because escapeHtml has
+ * no cross-character state - that is what keeps this linear rather than O(n^2).
  */
 
 import { escapeHtml } from './ReportView';
+import { createFrameScheduler, el, motionMs } from './dom';
 
 /**
  * The mandatory label. Kept as an exported constant so a test can assert it is
  * present and says the two things that matter: not the report, not checked.
  */
+/**
+ * No longer rendered - the panel header says "The model is thinking..." and the
+ * murmur's whole treatment marks it as scratch work. Kept as an exported
+ * constant because the honesty wording is asserted by the test suite, and
+ * because any future surface that shows raw reasoning should reuse it.
+ */
 export const THINKING_NOTICE =
-  "This is the model's raw private reasoning — unfiltered scratch work, NOT part of " +
-  "your report and NOT checked against the report's honesty rules.";
+  "This is the model's raw private reasoning. Unfiltered scratch work. It is NOT part of " +
+  "your report and is NOT checked against the report's honesty rules.";
 
 export const THINKING_STATUS = 'The model is thinking…';
 export const WRITING_STATUS = 'Writing your report…';
@@ -122,21 +128,18 @@ export function createThinkingModel(): ThinkingModel {
  * DOM shell
  * ------------------------------------------------------------------ */
 
-function el(tag: string, className?: string, text?: string): HTMLElement {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
 export interface ThinkingPanelApi {
-  /** The <details> panel element. */
+  /** The panel element. Always open - there is nothing to collapse. */
   element: HTMLElement;
+  /** Header slot: ReportView parks the live status line here. */
+  header: HTMLElement;
   /** Append a raw reasoning delta; renders on the next animation frame. */
   push(delta: string): void;
   /** Render any buffered delta immediately (call once at end of stream). */
   flush(): void;
-  /** First report content arrived: auto-collapse once. Returns true the first time. */
+  /** Drop anything still queued and stop the pacing timer. */
+  stop(): void;
+  /** First report content arrived. Returns true the first time only. */
   noteContent(): boolean;
   readonly active: boolean;
   readonly contentStarted: boolean;
@@ -145,46 +148,112 @@ export interface ThinkingPanelApi {
 export function createThinkingPanel(): ThinkingPanelApi {
   const model = createThinkingModel();
 
-  const panel = el('details', 'thinking-panel');
-  panel.setAttribute('open', '');
+  /*
+   * Always open. There is nothing to collapse and no disclosure chrome: the
+   * panel is a live window on the run, and hiding it would leave the reader
+   * staring at nothing while the model works.
+   *
+   * The header is a slot rather than a label - ReportView moves the live status
+   * line into it, so the elapsed clock and the panel are one thing instead of
+   * two that say the same thing.
+   */
+  const panel = el('section', 'thinking-panel');
+  const header = el('div', 'thinking-head');
+  panel.appendChild(header);
 
-  const summary = el('summary', 'thinking-summary');
-  summary.appendChild(el('span', 'thinking-title', 'Model thinking'));
-  const hint = el('span', 'thinking-hint', 'live');
-  summary.appendChild(hint);
-  panel.appendChild(summary);
+  /*
+   * The murmur: a short window onto the reasoning rather than a transcript of
+   * it. Only the last WORD_WINDOW words are kept in the DOM; new words arrive at
+   * the bottom and push older ones up and out through a mask that fades both
+   * edges, so the text drifts rather than scrolls. Nothing here is meant to be
+   * read closely - it is a sign of life.
+   *
+   * Capping the window also means the DOM stays a fixed size across a run of any
+   * length, instead of growing to tens of thousands of nodes.
+   */
+  const murmur = el('div', 'murmur');
+  murmur.setAttribute('aria-label', 'model reasoning stream');
+  const flow = el('div', 'murmur-flow');
+  murmur.appendChild(flow);
+  panel.appendChild(murmur);
 
-  const notice = el('p', 'thinking-notice', THINKING_NOTICE);
-  panel.appendChild(notice);
+  /** Words kept on screen. Older ones are dropped from the front. */
+  const WORD_WINDOW = 50;
+  /**
+   * The model arrives in bursts of dozens of words; releasing them all at once
+   * reads as a flicker rather than as thinking, so they are metered out.
+   *
+   * It also talks faster than the meter, so the backlog has to be shed somehow.
+   * Trimming a little on every drain is the obvious move and it is wrong: it
+   * skips a handful of words between every single emit, and what comes out is
+   * word salad rather than reasoning.
+   *
+   * Instead the backlog is allowed to build, and when it gets too far behind the
+   * queue jumps - dropping everything but the newest QUEUE_KEEP words. That
+   * gives long contiguous runs of real sentences with an occasional skip,
+   * instead of a continuous dribble of unrelated words.
+   */
+  const QUEUE_BEHIND = 140;
+  const QUEUE_KEEP = 24;
 
-  // A <pre> keeps the reasoning's own whitespace and line breaks, and reads as
-  // scratch work. Escaped deltas are appended to it - never innerHTML on the
-  // whole buffer - so cost stays proportional to what just arrived.
-  const stream = el('pre', 'thinking-stream');
-  stream.setAttribute('aria-label', 'model reasoning stream');
-  panel.appendChild(stream);
+  /** A delta can end mid-word, so the fragment is carried to the next drain. */
+  let partial = '';
+  let queue: string[] = [];
+  let pump = 0;
 
-  let frame = 0;
+  const emit = (piece: string): void => {
+    const word = el('span', 'murmur-w');
+    // Already escaped by the model - this is the same trust boundary the
+    // previous insertAdjacentHTML relied on.
+    word.innerHTML = piece;
+    flow.appendChild(word);
+    while (flow.childElementCount > WORD_WINDOW) {
+      flow.removeChild(flow.firstElementChild as ChildNode);
+    }
+  };
+
+  const tick = (): void => {
+    if (!queue.length) {
+      clearInterval(pump);
+      pump = 0;
+      return;
+    }
+    /*
+     * Strictly one word per tick. Catching up by emitting several at once was
+     * the obvious thing to do and it defeats the whole point - the model
+     * outruns the meter continuously, so it just pins the display at the fast
+     * rate again. Falling behind is handled by dropping from the queue instead,
+     * which costs words nobody was going to read rather than costing the pace.
+     */
+    emit(queue.shift() as string);
+  };
 
   const render = () => {
-    frame = 0;
     const html = model.drain();
     if (html === '') return;
-    stream.insertAdjacentHTML('beforeend', html);
-    // Follow the tail while expanded; leave a collapsed panel where the reader put it.
-    if (panel.hasAttribute('open')) stream.scrollTop = stream.scrollHeight;
+
+    // Safe to split escaped HTML on whitespace: the entities escapeHtml can
+    // produce (&lt; &gt; &amp; &quot; &#39;) contain none.
+    const combined = partial + html;
+    const pieces = combined.split(/\s+/);
+    partial = /\s$/.test(combined) ? '' : (pieces.pop() ?? '');
+
+    for (const piece of pieces) {
+      if (piece !== '') queue.push(piece);
+    }
+    // Only jump when genuinely far behind, so the run between jumps is long
+    // enough to read as sentences.
+    if (queue.length > QUEUE_BEHIND) queue = queue.slice(-QUEUE_KEEP);
+    if (!pump && queue.length) {
+      pump = setInterval(tick, motionMs('--murmur-pace', 70)) as unknown as number;
+    }
   };
 
-  const schedule = () => {
-    if (frame) return;
-    frame =
-      typeof requestAnimationFrame === 'function'
-        ? requestAnimationFrame(render)
-        : (setTimeout(render, 16) as unknown as number);
-  };
+  const { schedule } = createFrameScheduler(render);
 
   return {
     element: panel,
+    header,
 
     push(delta: string): void {
       model.push(delta);
@@ -195,14 +264,17 @@ export function createThinkingPanel(): ThinkingPanelApi {
       render();
     },
 
+    stop(): void {
+      queue = [];
+      clearInterval(pump);
+      pump = 0;
+    },
+
     noteContent(): boolean {
       const first = model.noteContent();
-      if (first) {
-        // Flush what has arrived so nothing is lost, then collapse.
-        render();
-        panel.removeAttribute('open');
-        hint.textContent = 'reasoning done · tap to expand';
-      }
+      // Flush what has arrived so the last words are not lost. The panel stays
+      // open either way - there is nothing to collapse.
+      if (first) render();
       return first;
     },
 

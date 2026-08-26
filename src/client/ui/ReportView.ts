@@ -1,6 +1,6 @@
 /**
  * Sections 2-7 of the report (05 §5.1), streamed from the server into one
- * <wired-card> each.
+ * card each.
  *
  * The stream arrives as markdown fragments at arbitrary boundaries, so the text
  * is split into sections line by line as it lands and re-rendered on the next
@@ -15,6 +15,7 @@
  * runs, so no model output can inject markup.
  */
 
+import { createFrameScheduler, el, motionMs, shimmerText } from './dom';
 import { applyTagChips } from './tags';
 import {
   createThinkingPanel,
@@ -287,25 +288,6 @@ export function renderMarkdown(markdown: string): string {
  * The view
  * ------------------------------------------------------------------ */
 
-function el(tag: string, className?: string, text?: string): HTMLElement {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-/**
- * <wired-spinner> is unusable in this dependency set: it draws its knob with
- * roughjs's `generator.fillPolygon`, which roughjs dropped after 4.3, so the
- * element throws inside draw() and never leaves opacity 0. (Same fault in
- * <wired-progress> and in <wired-card fill="...">, which is why no card here
- * sets `fill`.) The CSS ring below is the styled-plain-element fallback: a
- * wobbly dashed circle, in keeping with the hand-drawn look.
- */
-function spinner(): HTMLElement {
-  return el('span', 'spinner-fallback');
-}
-
 interface SectionCard {
   card: HTMLElement;
   heading: HTMLElement | null;
@@ -322,18 +304,18 @@ export interface ReportView {
   append(text: string): void;
   finish(): void;
   setStatus(text: string | null): void;
-  showAudit(violations: string[]): void;
   showFlatNotice(): void;
   showError(message: string, onRetry: () => void): void;
 }
 
 export function createReportView(): ReportView {
   const element = el('div', 'report stack-flow');
-  const banners = el('div', 'stack-flow');
+  const banners = el('div', 'banner-host stack-flow');
   const statusHost = el('div', 'status');
   statusHost.setAttribute('aria-live', 'polite');
-  // The thinking panel is mounted lazily, above the section cards.
-  const thinkingHost = el('div');
+  // The thinking panel is mounted lazily, above the section cards, and removed
+  // again once the report has content.
+  const thinkingHost = el('div', 'thinking-host');
   const sectionHost = el('div', 'stack-flow');
   element.append(banners, statusHost, thinkingHost, sectionHost);
 
@@ -345,13 +327,19 @@ export function createReportView(): ReportView {
   /** Whether any non-blank prose has arrived at all. */
   let anyText = false;
   let streaming = true;
-  let frame = 0;
   let flatNoticeShown = false;
   let errorCard: HTMLElement | null = null;
   /** The live reasoning panel; created on the first thinking delta. */
   let thinking: ThinkingPanelApi | null = null;
   /** Whether the thinking panel ever took over the status line. */
   let thinkingOwnsStatus = false;
+  /**
+   * Once the report starts arriving the reasoning window is retired for good.
+   * The SSE contract allows thinking and chunk events to interleave, so without
+   * this a late thinking delta would build the panel again underneath a report
+   * that is already on screen.
+   */
+  let thinkingRetired = false;
   /** Set once an error event arrives; suppresses the empty-report placeholder. */
   let errored = false;
   /** The placeholder card, so an error arriving later can withdraw it. */
@@ -365,7 +353,7 @@ export function createReportView(): ReportView {
       }
       return existing;
     }
-    const card = el('wired-card', 'report-section');
+    const card = el('section', 'card report-section t-toast');
     let heading: HTMLElement | null = null;
     if (title) {
       heading = el('h2', undefined, title);
@@ -374,6 +362,14 @@ export function createReportView(): ReportView {
     const body = el('div', 'report-body');
     card.appendChild(body);
     sectionHost.appendChild(card);
+    /*
+     * Entrance on the card itself, never on its contents. Anything that walked
+     * .report-body per chunk would redo renderMarkdown's output every frame and
+     * blow the streaming perf contract; this fires at most once per section and
+     * never re-enters paint(). The card node is also never replaced or cloned -
+     * the caret is a single shared element parented into it.
+     */
+    requestAnimationFrame(() => card.classList.add('is-open'));
     const made: SectionCard = { card, heading, body, html: '' };
     cards.set(index, made);
     if (index > tailIndex) tailIndex = index;
@@ -385,7 +381,6 @@ export function createReportView(): ReportView {
    * the one still being written, plus the one just sealed above it.
    */
   const paint = () => {
-    frame = 0;
     for (const section of splitter.drain()) {
       // An empty preamble means the model went straight to a heading: no card.
       if (section.title === null && section.body.trim() === '' && !cards.has(section.index)) {
@@ -406,22 +401,64 @@ export function createReportView(): ReportView {
     }
   };
 
-  const schedule = () => {
-    if (frame) return;
-    frame =
-      typeof requestAnimationFrame === 'function'
-        ? requestAnimationFrame(paint)
-        : (setTimeout(paint, 16) as unknown as number);
+  const { schedule } = createFrameScheduler(paint);
+
+  /*
+   * The status line. The label shimmers (transitions.dev 15) instead of
+   * spinning, and carries an elapsed clock: the reasoning phase can run for
+   * minutes, and a shimmer with no clock reads as a hang.
+   *
+   * `elapsedFrom` is set once per view, not per status change, so the count
+   * spans thinking -> writing rather than resetting at the handover. The
+   * counter is aria-hidden so the polite live region announces only the label.
+   */
+  let elapsedFrom = 0;
+  let elapsedTimer = 0;
+
+  const stopElapsed = (): void => {
+    if (!elapsedTimer) return;
+    clearInterval(elapsedTimer);
+    elapsedTimer = 0;
   };
 
-  const setStatus = (text: string | null): void => {
+  const writeStatus = (text: string | null): void => {
     statusHost.replaceChildren();
+    stopElapsed();
     if (text === null) return;
-    statusHost.append(spinner(), el('span', undefined, text));
+
+    if (!elapsedFrom) elapsedFrom = Date.now();
+    const elapsed = el('span', 'status-elapsed');
+    elapsed.setAttribute('aria-hidden', 'true');
+    statusHost.append(shimmerText(text), elapsed);
+
+    const tick = () => {
+      const seconds = Math.round((Date.now() - elapsedFrom) / 1000);
+      elapsed.textContent = seconds >= 1 ? `${seconds}s` : '';
+    };
+    tick();
+    elapsedTimer = setInterval(tick, 1000) as unknown as number;
+  };
+
+  /**
+   * Take the reasoning window away once the report has something to show. The
+   * status line lives in its header, so that has to come home first - it is the
+   * same element throughout, which is what keeps the elapsed clock running
+   * across the handover instead of restarting.
+   */
+  const retireThinking = (): void => {
+    if (!thinking) return;
+    const panel = thinking.element;
+    thinking.stop();
+    thinking = null;
+    thinkingRetired = true;
+    element.insertBefore(statusHost, thinkingHost);
+    panel.classList.remove('is-open');
+    setTimeout(() => panel.remove(), motionMs('--toast-close', 250) + 30);
   };
 
   const banner = (kind: 'warn' | 'calm', title: string): HTMLElement => {
-    const box = el('div', `banner ${kind}`);
+    const box = el('div', `banner t-toast ${kind}`);
+    requestAnimationFrame(() => box.classList.add('is-open'));
     const head = el('div', 'banner-head');
     head.appendChild(el('span', undefined, title));
     const dismiss = el('button', 'dismiss', 'Dismiss');
@@ -436,17 +473,25 @@ export function createReportView(): ReportView {
     element,
 
     appendThinking(text: string) {
-      if (text === '') return;
+      if (text === '' || thinkingRetired) return;
       if (!thinking) {
         thinking = createThinkingPanel();
+        thinking.element.classList.add('t-toast');
         thinkingHost.appendChild(thinking.element);
+        requestAnimationFrame(() => thinking?.element.classList.add('is-open'));
+        /*
+         * Move the live status line into the panel header rather than leaving a
+         * second copy of it above. Same element, so the shimmer and the elapsed
+         * clock carry across untouched - it just lives somewhere better now.
+         */
+        thinking.header.appendChild(statusHost);
       }
       thinking.push(text);
       // The reasoning phase can run for minutes; the panel plus this line are the
       // live feedback that replaces a blank spinner - but only until content flows.
       if (!anyText) {
         thinkingOwnsStatus = true;
-        setStatus(THINKING_STATUS);
+        writeStatus(THINKING_STATUS);
       }
     },
 
@@ -457,7 +502,9 @@ export function createReportView(): ReportView {
         // Real report content has started: collapse the scratch work so the
         // report is the focus (still re-expandable), and hand the status line back.
         thinking?.noteContent();
-        if (thinkingOwnsStatus) setStatus(WRITING_STATUS);
+        // The report is here; the reasoning window has done its job.
+        retireThinking();
+        if (thinkingOwnsStatus) writeStatus(WRITING_STATUS);
       }
       splitter.push(text);
       schedule();
@@ -483,18 +530,7 @@ export function createReportView(): ReportView {
     },
 
     setStatus(text: string | null) {
-      statusHost.replaceChildren();
-      if (text === null) return;
-      statusHost.append(spinner(), el('span', undefined, text));
-    },
-
-    showAudit(violations: string[]) {
-      if (!violations.length) return;
-      const box = banner('warn', 'Automated honesty check flagged:');
-      const list = el('ul');
-      for (const violation of violations) list.appendChild(el('li', undefined, violation));
-      box.appendChild(list);
-      banners.prepend(box);
+      writeStatus(text);
     },
 
     showFlatNotice() {
@@ -502,7 +538,7 @@ export function createReportView(): ReportView {
       flatNoticeShown = true;
       const box = banner(
         'calm',
-        'Your profile is too flat for this instrument to resolve structure — here’s what that means',
+        'Your profile is too flat for this instrument to resolve structure. Here is what that means',
       );
       const body = el('div', 'banner-body');
       body.appendChild(
@@ -510,8 +546,8 @@ export function createReportView(): ReportView {
           'p',
           undefined,
           'Your eight scores sit close enough together that the differences between them are ' +
-            'inside this instrument’s noise. Any structure a report claimed to see here would ' +
-            'be manufactured, and most of it would be true of nearly anyone — so we are not ' +
+            'inside this instrument\'s noise. Any structure a report claimed to see here would ' +
+            'be manufactured, and most of it would be true of nearly anyone. So we are not ' +
             'saying it.',
         ),
       );
@@ -547,6 +583,8 @@ export function createReportView(): ReportView {
 
     showError(message: string, onRetry: () => void) {
       errored = true;
+      // finish() may never run on this path, so the clock is stopped here too.
+      stopElapsed();
       // Withdraw the placeholder if finish() already put one up: the error
       // explains the silence, and "returned no text" would contradict it.
       if (placeholderIndex !== null) {
@@ -555,7 +593,9 @@ export function createReportView(): ReportView {
         placeholderIndex = null;
       }
       errorCard?.remove();
-      const card = el('wired-card', 'error-card');
+      const card = el('div', 'card error-card t-toast');
+      card.setAttribute('role', 'alert');
+      requestAnimationFrame(() => card.classList.add('is-open'));
       card.appendChild(el('h2', 'card-title', 'That did not go through'));
       card.appendChild(el('p', 'card-sub', message));
       card.appendChild(
@@ -565,7 +605,8 @@ export function createReportView(): ReportView {
           'Your stack signature above was computed in your browser and is unaffected.',
         ),
       );
-      const retry = el('wired-button', undefined, 'Try again');
+      const retry = el('button', 'btn btn-secondary', 'Try again');
+      retry.type = 'button';
       retry.addEventListener('click', () => {
         card.remove();
         errorCard = null;

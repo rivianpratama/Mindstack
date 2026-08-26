@@ -8,37 +8,35 @@
  * with the arithmetic they came for.
  */
 
-import 'wired-elements';
-
 import { computeSignature } from '../shared/geometry';
 import { validateScores } from '../shared/validation';
 import type { Scores } from '../shared/geometry/types';
 import { generateReport, type GenerateRequest } from './api';
 import { createInputForm } from './ui/InputForm';
-import { createSignatureView } from './ui/SignatureView';
+import { createSignatureView, createTierStrip } from './ui/SignatureView';
 import { createReportView } from './ui/ReportView';
 import { confirmOutOfRange, summarizeFlags } from './ui/validation-ui';
+import { el } from './ui/dom';
 
 const app = document.getElementById('app');
 if (!app) throw new Error('mindstack: #app is missing from the page');
 
 /* ---- chrome ---- */
 
-const masthead = document.createElement('header');
-masthead.className = 'masthead';
-const title = document.createElement('h1');
-title.textContent = 'Mindstack';
-const tagline = document.createElement('p');
-tagline.textContent =
-  'Eight cognitive-function scores in, one structured self-reflection out. Not a type, not an assessment — a set of hypotheses with the arithmetic shown.';
-masthead.append(title, tagline);
+const masthead = el('header', 'masthead');
+masthead.append(
+  el('h1', undefined, 'Mindstack'),
+  el(
+    'p',
+    undefined,
+    'Eight cognitive-function scores in, one structured self-reflection out. A set of hypotheses with the math shown.',
+  ),
+);
 
-const formSlot = document.createElement('section');
-const outputSlot = document.createElement('section');
-outputSlot.className = 'stack-flow';
+const formSlot = el('section');
+const outputSlot = el('section', 'stack-flow');
 
-const shell = document.createElement('div');
-shell.className = 'stack-flow';
+const shell = el('div', 'stack-flow');
 shell.append(formSlot, outputSlot);
 app.append(masthead, shell);
 
@@ -82,40 +80,87 @@ async function submit(): Promise<void> {
 
 async function run(scores: Scores): Promise<void> {
   running = true;
+  /*
+   * Dismiss the on-screen keyboard before anything moves. Otherwise the
+   * viewport growing back races the card collapsing and the scroll below, and
+   * on a phone all three fight each other.
+   */
+  (document.activeElement as HTMLElement | null)?.blur?.();
   form.setBusy(true);
+  form.setStale(false);
+  /*
+   * Hide the form completely, leaving only its back button. Fired, not awaited -
+   * the promise is used further down, purely to time the scroll.
+   */
+  const collapsed = form.collapse();
+  masthead.dataset.compact = 'true';
   outputSlot.replaceChildren();
 
-  /* 1. Section 1, immediately, from local arithmetic. */
+  /*
+   * 1. The geometry, computed locally and immediately - but NOT yet shown.
+   *
+   * The readout is the working, not the answer, so it is held back until the
+   * report is finished and then mounted underneath it. Computing it now still
+   * matters: it is what catches un-measurable numbers before any network call,
+   * and it costs nothing.
+   */
   let signatureRegime = 'NORMAL';
+  let signatureView: HTMLElement | null = null;
+  let tierStrip: HTMLElement | null = null;
   try {
     const signature = computeSignature(scores);
     signatureRegime = signature.regime;
-    outputSlot.appendChild(createSignatureView(signature));
+    signatureView = createSignatureView(signature);
+    signatureView.classList.add('t-toast');
+    // The headline reading goes up straight away, above the thinking panel.
+    // Only the working is held back until the report is done.
+    tierStrip = createTierStrip(signature);
   } catch (error) {
-    const card = document.createElement('wired-card');
-    const heading = document.createElement('h2');
-    heading.className = 'card-title';
-    heading.textContent = 'Those numbers could not be measured';
-    const detail = document.createElement('p');
-    detail.className = 'card-sub';
-    detail.textContent = error instanceof Error ? error.message : String(error);
-    card.append(heading, detail);
+    const card = el('div', 'card error-card');
+    card.setAttribute('role', 'alert');
+    card.append(
+      el('h2', 'card-title', 'Those numbers could not be measured'),
+      el('p', 'card-sub', error instanceof Error ? error.message : String(error)),
+    );
     outputSlot.appendChild(card);
     running = false;
     form.setBusy(false);
     return;
   }
 
-  /* 2. Sections 2-6, streamed. */
+  /* 2. Sections 2-7, streamed. This is what the reader came for, so it sits at
+   * the top of the output with nothing above it to scroll past. */
   const report = createReportView();
+  if (tierStrip) {
+    outputSlot.appendChild(tierStrip);
+    requestAnimationFrame(() => tierStrip?.classList.add('is-open'));
+  }
   outputSlot.appendChild(report.element);
   report.setStatus('interpreting your profile…');
   if (signatureRegime === 'FLAT') report.showFlatNotice();
 
-  outputSlot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  /*
+   * Wait for the collapse to settle before scrolling. scrollIntoView computes
+   * its target from the layout at call time, and the card above is in the middle
+   * of losing several hundred pixels - scrolling now lands that far too low.
+   */
+  void collapsed.then(() => {
+    outputSlot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 
   const request: GenerateRequest = { scores };
   let failed = false;
+
+  /*
+   * Mount the readout below the report once the run settles. It is revealed on
+   * failure too: the arithmetic is local and already done, and a failed request
+   * should still leave the person with the numbers they came for.
+   */
+  const revealSignature = (): void => {
+    if (!signatureView || signatureView.isConnected) return;
+    outputSlot.appendChild(signatureView);
+    requestAnimationFrame(() => signatureView?.classList.add('is-open'));
+  };
 
   await generateReport(request, {
     onMeta(meta) {
@@ -130,9 +175,6 @@ async function run(scores: Scores): Promise<void> {
     onChunk(text) {
       report.append(text);
     },
-    onAudit(audit) {
-      report.showAudit(audit.violations);
-    },
     onError(error) {
       failed = true;
       report.setStatus(null);
@@ -142,36 +184,19 @@ async function run(scores: Scores): Promise<void> {
         void run(scores);
       });
       report.finish();
+      revealSignature();
     },
     onDone() {
       report.setStatus(null);
       report.finish();
+      revealSignature();
     },
   });
 
   if (!failed) report.finish();
   report.setStatus(null);
+  // Backstop: a stream that ends without a terminal event still reveals it.
+  revealSignature();
   running = false;
   form.setBusy(false);
 }
-
-/*
- * wired-elements measure their sketch geometry from the layout box. Cards and
- * inputs watch themselves with a ResizeObserver, buttons and dividers do not, so
- * nudge every wired element after a viewport change (orientation, on-screen
- * keyboard, desktop resize).
- */
-let redrawTimer = 0;
-window.addEventListener(
-  'resize',
-  () => {
-    window.clearTimeout(redrawTimer);
-    redrawTimer = window.setTimeout(() => {
-      const wired = document.querySelectorAll<HTMLElement & { wiredRender?: (f: boolean) => void }>(
-        'wired-input, wired-button, wired-card, wired-divider',
-      );
-      wired.forEach((node) => node.wiredRender?.(true));
-    }, 180);
-  },
-  { passive: true },
-);

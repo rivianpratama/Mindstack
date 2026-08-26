@@ -1,0 +1,50 @@
+/*
+ * Base layer: document-level type and the few element defaults the app relies
+ * on. Everything else is a component class.
+ */
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Focus. --ring is darkened from the shadcn default precisely so this is
+ * visible; do not soften it.
+ */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: calc(var(--radius) - 4px);
+}
+
+/*
+ * The system stack loses Inter's default tabular figures, so ask for them
+ * everywhere a number has to line up or hold still while streaming.
+ */
+.sig-fn-score,
+.input,
+.status-elapsed,
+.readout-k > b {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/*
+ * .form-errors is driven by the `hidden` IDL property, and preflight's
+ * [hidden]{display:none} loses to any later display: rule on the same element.
+ * Pin it.
+ */
+.form-errors[hidden] {
+  display: none !important;
+}

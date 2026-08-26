@@ -1,0 +1,156 @@
+/*
+ * The palette. shadcn/ui's neutral set in oklch, plus the domain tokens that
+ * carry meaning rather than decoration (the four tiers, the three semantics).
+ *
+ * These live in a plain :root rather than inside @theme, for two reasons:
+ * @theme variables are Tailwind's namespace and cannot be redeclared
+ * per-selector for dark mode; and moving them there renames them --color-*,
+ * which would silently break every var(--muted-foreground) reference in
+ * motion.css. app.css bridges them into Tailwind with @theme inline.
+ *
+ * Road not taken: light-dark() collapses the two palettes into one block and is
+ * Baseline since May 2024, but it breaks paste-compatibility with token blocks
+ * from shadcn / beui / rareui - which is the whole payoff of adopting them.
+ */
+
+:root {
+  color-scheme: light;
+
+  --radius: 0.625rem;
+
+  /* --- shadcn neutral, light --- */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+
+  --border: oklch(0.922 0 0);
+
+  /*
+   * Deviation from shadcn defaults, deliberate. Upstream ships
+   * --input: oklch(0.922 0 0) (1.26:1 on white) and --ring: oklch(0.708 0 0)
+   * (2.59:1). Both fail WCAG 1.4.11, which asks 3:1 for non-text UI. This whole
+   * app is eight numeric fields and its failure mode is a mistyped score, so
+   * the field boundary and the focus ring have to be visible.
+   */
+  --input: oklch(0.66 0 0);   /* 3.11:1 on --background */
+  --ring: oklch(0.556 0 0);   /* 4.73:1 on --background */
+
+  /*
+   * The tier ramp. Ordinal, not categorical: lead > support > reserve > shadow
+   * is a ranking, so hue must hold across themes. That is exactly why these are
+   * NOT aliased onto shadcn's --chart-* ramp, which re-picks hues per theme
+   * (light --chart-1 is orange, dark --chart-1 is purple) and is sized as fill,
+   * not as text. .sig-tier-tag renders at 0.7rem in currentColor, so every one
+   * of these has to clear 4.5:1 on --card and --muted, not 3:1.
+   */
+  --tier-lead: oklch(0.51 0.11 152);      /* 5.45:1 on --card */
+  --tier-support: oklch(0.52 0.13 250);   /* 5.50:1 */
+  --tier-reserve: oklch(0.52 0.1 70);     /* 5.63:1 */
+  --tier-shadow: oklch(0.52 0.15 30);     /* 5.93:1 */
+
+  /* Semantics ride the same ramp, so the page never holds two greens. */
+  --warn: var(--tier-reserve);
+  --calm: var(--tier-support);
+  --alarm: var(--tier-shadow);
+
+  /*
+   * Tints composite against the actual surface via color-mix rather than
+   * rgba(), so a tinted banner nested in a card never darkens twice.
+   * (oklch(from ...) relative colour would be neater; Firefox only reached it
+   * in 128, so color-mix - Baseline May 2023 - is the safer floor.)
+   */
+  --warn-bg: color-mix(in oklab, var(--warn) 12%, var(--card));
+  --calm-bg: color-mix(in oklab, var(--calm) 12%, var(--card));
+  --alarm-bg: color-mix(in oklab, var(--alarm) 12%, var(--card));
+
+  /* Vertical rhythm: the old .stack-flow 18px, tokenised. */
+  --space-flow: 1.125rem;
+}
+
+/*
+ * Dark. Duplicated across two activation blocks on purpose - the media query
+ * for the system preference, the attribute for an explicit override. Both are
+ * specificity (0,2,0), so source order decides: the attribute block comes last
+ * and therefore wins. Adding a theme toggle later is then JS only:
+ *   document.documentElement.dataset.theme = 'dark'
+ */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.269 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.371 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+
+    --border: oklch(1 0 0 / 12%);
+    --input: oklch(1 0 0 / 35%);
+    --ring: oklch(0.708 0 0);
+
+    --tier-lead: oklch(0.8 0.13 152);      /* 10.08:1 on --card */
+    --tier-support: oklch(0.79 0.1 250);   /* 9.32:1 */
+    --tier-reserve: oklch(0.82 0.13 80);   /* 10.14:1 */
+    --tier-shadow: oklch(0.78 0.115 30);   /* 8.56:1 */
+
+    --warn-bg: color-mix(in oklab, var(--warn) 14%, var(--card));
+    --calm-bg: color-mix(in oklab, var(--calm) 14%, var(--card));
+    --alarm-bg: color-mix(in oklab, var(--alarm) 14%, var(--card));
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.269 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.371 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 35%);
+  --ring: oklch(0.708 0 0);
+
+  --tier-lead: oklch(0.8 0.13 152);
+  --tier-support: oklch(0.79 0.1 250);
+  --tier-reserve: oklch(0.82 0.13 80);
+  --tier-shadow: oklch(0.78 0.115 30);
+
+  --warn-bg: color-mix(in oklab, var(--warn) 14%, var(--card));
+  --calm-bg: color-mix(in oklab, var(--calm) 14%, var(--card));
+  --alarm-bg: color-mix(in oklab, var(--alarm) 14%, var(--card));
+}

@@ -10,16 +10,20 @@
     "build": "vite build",
     "start": "tsx src/server/index.ts",
     "test": "vitest run",
-    "build:kb": "node scripts/build-kb.mjs"
+    "typecheck": "tsc --noEmit",
+    "build:kb": "node scripts/build-kb.mjs",
+    "build:foundations": "node scripts/build-foundations.mjs",
+    "build:data": "npm run build:kb && npm run build:foundations"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "hono": "^4.13.4",
-    "openai": "^7.5.0",
-    "wired-elements": "^3.0.0-rc.6"
+    "openai": "^7.5.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.3.0",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",

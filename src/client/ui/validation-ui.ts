@@ -9,15 +9,9 @@
 
 import { DEFAULT_SCALE_MAX, type FunctionKey } from '../../shared/geometry/types';
 import type { ValidationResult } from '../../shared/validation';
+import { el } from './dom';
 
 export type ConfirmChoice = 'confirm' | 'edit';
-
-function el(tag: string, className?: string, text?: string): HTMLElement {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 /** The question the dialog asks about one out-of-range value. */
 export function outOfRangeQuestion(
@@ -26,7 +20,7 @@ export function outOfRangeQuestion(
   scaleMin: number,
   scaleMax: number,
 ): string {
-  return `${fn} = ${String(value)} is outside the expected ${scaleMin}–${scaleMax} range — confirm it's what the test showed?`;
+  return `${fn} = ${String(value)} is outside the expected ${scaleMin} to ${scaleMax} range. Is that what the test showed?`;
 }
 
 export interface ValidationSummary {
@@ -53,11 +47,11 @@ export function summarizeFlags(result: ValidationResult): ValidationSummary {
   }
 
   if (missing.length === 8) {
-    messages.unshift('All eight scores are needed — the geometry is the shape of the whole set.');
+    messages.unshift('All eight scores are needed. The result depends on the shape of the whole set.');
   } else if (missing.length > 0) {
     messages.unshift(
-      `Still needed: ${missing.join(', ')}. All eight scores are required — the geometry is the ` +
-        'shape of the whole set, so a missing value is not a zero.',
+      `Still needed: ${missing.join(', ')}. All eight scores are required. The result depends on ` +
+        'the shape of the whole set, so a missing value is not a zero.',
     );
   }
 
@@ -86,9 +80,17 @@ export function confirmOutOfRange(
   if (questions.length === 0) return Promise.resolve<ConfirmChoice>('confirm');
 
   return new Promise<ConfirmChoice>((resolve) => {
-    const dialog = document.createElement('wired-dialog') as HTMLElement & { open: boolean };
-    dialog.setAttribute('role', 'dialog');
-    dialog.setAttribute('aria-modal', 'true');
+    /*
+     * A native <dialog>, which brings focus trapping, Escape, ::backdrop,
+     * top-layer stacking and focus restoration on close - all of which this
+     * function used to hand-roll around wired-dialog. It also means the content
+     * finally inherits the theme instead of the literal ink colours
+     * wired-dialog's white shadow-root card forced.
+     */
+    const dialog = el('dialog', 'dialog t-modal');
+    // role and aria-modal are implicit on a modal <dialog>; stating them
+    // explicitly removes the native semantics in some browsers.
+    dialog.setAttribute('aria-labelledby', 'confirm-title');
 
     const body = el('div', 'dialog-body');
     const heading = el(
@@ -96,6 +98,7 @@ export function confirmOutOfRange(
       undefined,
       questions.length === 1 ? 'One number to confirm' : `${questions.length} numbers to confirm`,
     );
+    heading.id = 'confirm-title';
     body.appendChild(heading);
 
     if (questions.length === 1) {
@@ -110,45 +113,41 @@ export function confirmOutOfRange(
       el(
         'p',
         'fine',
-        'The Sakinorva functions test normally reports 0–50. If that is genuinely what it ' +
-          'showed, we will use the number exactly as you entered it — nothing is clamped, ' +
-          'rescaled or rounded.',
+        'The Sakinorva functions test normally reports 0 to 50. If that is really what it ' +
+          'showed, we will use the number exactly as you entered it. Nothing is changed, ' +
+          'cut off, or rounded.',
       ),
     );
 
-    const actions = el('div', 'dialog-actions');
-    const confirm = el('wired-button', undefined, 'Confirm — use as entered');
-    const edit = el('wired-button', undefined, 'Edit');
+    /*
+     * form[method=dialog] collapses every exit path onto one `close` event:
+     * either button sets returnValue from its own value, and Escape leaves it
+     * empty. So Escape reads as 'edit', which is what it has always meant here.
+     */
+    const actions = el('form', 'dialog-actions');
+    actions.setAttribute('method', 'dialog');
+    const confirm = el('button', 'btn btn-primary', 'Confirm, use as entered');
+    confirm.value = 'confirm';
+    confirm.autofocus = true;
+    const edit = el('button', 'btn btn-secondary', 'Edit');
+    edit.value = 'edit';
     actions.append(confirm, edit);
     body.appendChild(actions);
     dialog.appendChild(body);
 
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-
-    const close = (choice: ConfirmChoice) => {
-      document.removeEventListener('keydown', onKey, true);
-      dialog.open = false;
+    // Guards the Escape-plus-click race the old handler did not cover.
+    let settled = false;
+    dialog.addEventListener('close', () => {
+      if (settled) return;
+      settled = true;
+      const choice: ConfirmChoice = dialog.returnValue === 'confirm' ? 'confirm' : 'edit';
       dialog.remove();
-      previouslyFocused?.focus?.();
       resolve(choice);
-    };
-
-    function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        close('edit');
-      }
-    }
-
-    confirm.addEventListener('click', () => close('confirm'));
-    edit.addEventListener('click', () => close('edit'));
-    document.addEventListener('keydown', onKey, true);
+    });
 
     document.body.appendChild(dialog);
-    // Open on the next frame so the card's slide-in transition actually runs.
-    requestAnimationFrame(() => {
-      dialog.open = true;
-      requestAnimationFrame(() => confirm.focus());
-    });
+    dialog.showModal();
+    // One frame between showModal() and .is-open so the scale-in actually runs.
+    requestAnimationFrame(() => dialog.classList.add('is-open'));
   });
 }

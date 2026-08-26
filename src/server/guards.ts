@@ -62,7 +62,7 @@ function normalize(text: string): string {
 
 /**
  * True when the §5.6 block is present verbatim (modulo blockquote markers, emphasis and
- * line wrapping — the three things a streamed markdown draft legitimately varies).
+ * line wrapping, the three things a streamed markdown draft legitimately varies).
  */
 export function hasDisclaimer(text: string): boolean {
   return normalize(text).includes(normalize(getDisclaimer()));
@@ -109,7 +109,7 @@ export function auditReport(text: string): string[] {
   if (!hasDisclaimer(text)) {
     violations.push(
       'prohibited output 12: the report did not end with the required disclaimer block ' +
-        '(05 §5.6) — it was appended by the server',
+        '(05 §5.6). It was appended by the server',
     );
   }
 
@@ -121,9 +121,16 @@ export function auditReport(text: string): string[] {
  * the audit. Falls back to the untouched text when the block is absent.
  */
 function stripDisclaimer(text: string): string {
-  const marker = 'What this is — and is not.';
+  const marker = 'What this is and is not.';
   const index = text.indexOf(marker);
-  if (index === -1) return text;
+  if (index === -1) {
+    const oldMarker = 'What this is — and is not.';
+    const oldIndex = text.indexOf(oldMarker);
+    if (oldIndex === -1) return text;
+    const end = text.indexOf('a qualified professional can.', oldIndex);
+    if (end === -1) return text.slice(0, oldIndex);
+    return text.slice(0, oldIndex) + text.slice(end + 'a qualified professional can.'.length);
+  }
   // Keep anything the model wrote after the block: it is prohibited output 12 territory
   // but still has to be audited for vocabulary.
   const end = text.indexOf('a qualified professional can.', index);

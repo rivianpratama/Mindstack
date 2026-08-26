@@ -1,12 +1,12 @@
 /**
- * POST /api/generate — validate, compute the authoritative Signature, assemble the
+ * POST /api/generate: validate, compute the authoritative Signature, assemble the
  * prompt, stream the report as Server-Sent Events.
  *
  * Event sequence (fixed contract; the client is built against it):
  *   meta     {"regime":"FLAT"|"STAIRCASE"|"NORMAL","llm":boolean}
- *   thinking {"text":string}  repeated — the model's raw reasoning, streamed live; never
+ *   thinking {"text":string}  repeated: the model's raw reasoning, streamed live; never
  *                             buffered, audited, or given the disclaimer
- *   chunk    {"text":string}  repeated — report markdown for sections 2-6
+ *   chunk    {"text":string}  repeated: report markdown for sections 2-6
  *   audit    {"violations":string[]}   once, after generation
  *   done     {}
  *   error    {"message":string}  on upstream failure; terminal, replaces audit+done
@@ -63,7 +63,7 @@ generateRoute.post('/generate', async (c) => {
   const signature = computeSignature(validation.scores);
   /*
    * `context` is accepted for wire compatibility and then ignored. The report generates its
-   * own 5W1H scenarios from the taxonomy and this profile's supply grades, so there is no
+   * own situational scenarios from the taxonomy and this profile's supply grades, so there is no
    * reader-supplied situation to read any more.
    */
   const assembly = assemblePrompt(signature);
@@ -131,8 +131,8 @@ generateRoute.post('/generate', async (c) => {
     }
 
     /*
-     * Guard pass. The audit runs on what the model actually produced — so a missing
-     * disclaimer is reported as the violation it is — and the repair is then streamed as
+     * Guard pass. The audit runs on what the model actually produced, so a missing
+     * disclaimer is reported as the violation it is, and the repair is then streamed as
      * a final chunk, because a report without the §5.6 block is a hard fail.
      */
     const violations = auditReport(buffered);

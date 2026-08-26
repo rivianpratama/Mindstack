@@ -20,8 +20,8 @@ import type { Scores } from '../src/shared/geometry/types';
 const CANNED_STREAM =
   'event: meta\ndata: {"regime":"NORMAL","llm":true}\n\n' +
   'event: chunk\ndata: {"text":"## How your mind tends to work\\n"}\n\n' +
-  'event: chunk\ndata: {"text":"One hypothesis to test [H] against a real week."}\n\n' +
-  'event: chunk\ndata: {"text":"\\n\\n> **What this is** — and is not.\\n"}\n\n' +
+  'event: chunk\ndata: {"text":"One hypothesis to test against a real week."}\n\n' +
+  'event: chunk\ndata: {"text":"\\n\\n> **What this is and is not.**\\n"}\n\n' +
   'event: audit\ndata: {"violations":["Section 4 has no counter-observation."]}\n\n' +
   'event: done\ndata: {}\n\n';
 
@@ -164,7 +164,7 @@ describe('dispatchFrame', () => {
     };
     for (const frame of feed(CANNED_STREAM, 40)) await dispatchFrame(frame, handlers);
     expect(order).toHaveLength(3);
-    expect(order[1]).toContain('One hypothesis to test [H]');
+    expect(order[1]).toContain('One hypothesis to test against a real week.');
   });
 
   it('treats an error frame as terminal and supplies a fallback message', async () => {
