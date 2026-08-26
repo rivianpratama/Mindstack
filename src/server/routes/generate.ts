@@ -3,14 +3,22 @@
  * prompt, stream the report as Server-Sent Events.
  *
  * Event sequence (fixed contract; the client is built against it):
- *   meta   {"regime":"FLAT"|"STAIRCASE"|"NORMAL","llm":boolean}
- *   chunk  {"text":string}    repeated — report markdown for sections 2-6
- *   audit  {"violations":string[]}   once, after generation
- *   done   {}
- *   error  {"message":string}  on upstream failure; terminal, replaces audit+done
+ *   meta     {"regime":"FLAT"|"STAIRCASE"|"NORMAL","llm":boolean}
+ *   thinking {"text":string}  repeated — the model's raw reasoning, streamed live; never
+ *                             buffered, audited, or given the disclaimer
+ *   chunk    {"text":string}  repeated — report markdown for sections 2-6
+ *   audit    {"violations":string[]}   once, after generation
+ *   done     {}
+ *   error    {"message":string}  on upstream failure; terminal, replaces audit+done
+ *
+ * `meta` is first; `thinking` and `chunk` events follow and may interleave (reasoning
+ * usually precedes content, but the client handles either order).
  *
  * Out-of-range scores are accepted here: 02 §1 forbids clamping, and the client confirms
  * them with the user before sending. Only missing or non-numeric values are a 400.
+ *
+ * The request's `context` field is accepted and ignored: section 3 is built from scenarios
+ * the report generates for itself, not from a situation the reader types in.
  */
 
 import { Hono } from 'hono';
@@ -18,7 +26,7 @@ import { streamSSE } from 'hono/streaming';
 
 import { computeSignature } from '../../shared/geometry';
 import { validateScores } from '../../shared/validation';
-import { assemblePrompt, type ContextAnswers } from '../prompt/assemble';
+import { assemblePrompt } from '../prompt/assemble';
 import { auditReport, ensureDisclaimer } from '../guards';
 import { isConfigured, streamReport } from '../deepseek';
 
@@ -53,7 +61,12 @@ generateRoute.post('/generate', async (c) => {
   }
 
   const signature = computeSignature(validation.scores);
-  const assembly = assemblePrompt(signature, readContext(body?.context));
+  /*
+   * `context` is accepted for wire compatibility and then ignored. The report generates its
+   * own 5W1H scenarios from the taxonomy and this profile's supply grades, so there is no
+   * reader-supplied situation to read any more.
+   */
+  const assembly = assemblePrompt(signature);
 
   return streamSSE(c, async (stream) => {
     await stream.writeSSE({
@@ -92,16 +105,22 @@ generateRoute.post('/generate', async (c) => {
     const abort = new AbortController();
     stream.onAbort(() => abort.abort());
 
+    // Only report CONTENT accumulates here. Thinking is passed through verbatim and is
+    // never buffered, so guards, auditReport and ensureDisclaimer never see reasoning text.
     let buffered = '';
     try {
-      for await (const delta of streamReport({
+      for await (const item of streamReport({
         system: assembly.systemPrompt,
         user: assembly.userPrompt,
         maxTokens: assembly.maxTokens,
         signal: abort.signal,
       })) {
-        buffered += delta;
-        await stream.writeSSE({ event: 'chunk', data: JSON.stringify({ text: delta }) });
+        if (item.kind === 'thinking') {
+          await stream.writeSSE({ event: 'thinking', data: JSON.stringify({ text: item.text }) });
+          continue;
+        }
+        buffered += item.text;
+        await stream.writeSSE({ event: 'chunk', data: JSON.stringify({ text: item.text }) });
       }
     } catch (error) {
       await stream.writeSSE({
@@ -130,17 +149,6 @@ generateRoute.post('/generate', async (c) => {
   });
 });
 
-/** The 5W1H block, if the client sent one. Anything else is treated as absent. */
-function readContext(value: unknown): ContextAnswers | null {
-  if (!value || typeof value !== 'object') return null;
-  const record = value as Record<string, unknown>;
-  const context: ContextAnswers = {};
-  for (const field of ['who', 'what', 'when', 'where', 'why', 'how'] as const) {
-    const entry = record[field];
-    if (typeof entry === 'string') context[field] = entry;
-  }
-  return context;
-}
 
 /** Deterministic text is streamed in paragraph-sized pieces so the client renders progressively. */
 function chunkText(text: string): string[] {

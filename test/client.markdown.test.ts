@@ -79,8 +79,8 @@ describe('renderMarkdown - the supported subset', () => {
   });
 
   it('renders ## as h3 and ### as h4', () => {
-    expect(renderMarkdown('## Levers\n### Experiment')).toBe(
-      '<h3>Levers</h3><h4>Experiment</h4>',
+    expect(renderMarkdown('## Things you can try\n### Experiment')).toBe(
+      '<h3>Things you can try</h3><h4>Experiment</h4>',
     );
   });
 
@@ -154,36 +154,39 @@ describe('section splitting', () => {
   });
 
   it('tolerates trailing space, extra hashes and a section number', () => {
-    expect(matchSectionTitle('##   Levers   ')).toBe('Levers');
-    expect(matchSectionTitle('### 5. Levers ###')).toBe('Levers');
+    expect(matchSectionTitle('##   Things you can try   ')).toBe('Things you can try');
+    expect(matchSectionTitle('### 5. Things you can try ###')).toBe('Things you can try');
     expect(matchSectionTitle('## Something else')).toBeNull();
-    expect(matchSectionTitle('Levers')).toBeNull();
+    expect(matchSectionTitle('Things you can try')).toBeNull();
   });
 
   it('splits the body under each heading and keeps a preamble', () => {
     const parts = splitSections(
-      'stray intro\n## Under pressure\nFe is the floor.\n## Levers\nTry this.',
+      'stray intro\n## When things get stressful\nFe is the floor.\n## Things you can try\nTry this.',
     );
-    expect(parts.map((p) => p.title)).toEqual([null, 'Under pressure', 'Levers']);
+    expect(parts.map((p) => p.title)).toEqual([null, 'When things get stressful', 'Things you can try']);
     expect(parts[1].body.trim()).toBe('Fe is the floor.');
     expect(parts[2].body.trim()).toBe('Try this.');
   });
 
   it('carries all six contract sections, in the server ordering', () => {
     expect(SECTION_TITLES).toEqual([
-      'How your processing runs',
-      'Where you are right now',
-      'Under pressure',
-      'Levers',
-      'How this reading was made',
-      'What this report cannot know',
+      'How your mind tends to work',
+      'How you handle different situations',
+      'When things get stressful',
+      'Things you can try',
+      'Where this report comes from',
+      "What this report can't tell you",
     ]);
-    // The new section sits between Levers and the limits section.
-    expect(SECTION_TITLES.indexOf('How this reading was made')).toBe(
-      SECTION_TITLES.indexOf('Levers') + 1,
+    // The old section-3 heading is gone from the contract.
+    expect(SECTION_TITLES).not.toContain('Where you are right now');
+    expect(matchSectionTitle('## Where you are right now')).toBeNull();
+    // The provenance section sits between Things you can try and the limits section.
+    expect(SECTION_TITLES.indexOf('Where this report comes from')).toBe(
+      SECTION_TITLES.indexOf('Things you can try') + 1,
     );
-    expect(SECTION_TITLES.indexOf('What this report cannot know')).toBe(
-      SECTION_TITLES.indexOf('How this reading was made') + 1,
+    expect(SECTION_TITLES.indexOf("What this report can't tell you")).toBe(
+      SECTION_TITLES.indexOf('Where this report comes from') + 1,
     );
   });
 });
@@ -191,14 +194,31 @@ describe('section splitting', () => {
 describe('couldContinueHeading', () => {
   it('withholds a heading that has only half arrived', () => {
     expect(couldContinueHeading('#')).toBe(true);
-    expect(couldContinueHeading('## Under pre')).toBe(true);
-    expect(couldContinueHeading('## How this reading was m')).toBe(true);
-    // Ambiguous prefix of two different headings is still withheld.
+    expect(couldContinueHeading('## When thing')).toBe(true);
+    expect(couldContinueHeading('## Where this report comes f')).toBe(true);
+    // Two headings now begin "How ", and both share "How you" - an
+    // ambiguous prefix must be withheld until it resolves.
     expect(couldContinueHeading('## How ')).toBe(true);
+    expect(couldContinueHeading('## How you')).toBe(true);
+    expect(couldContinueHeading('## How you handle different')).toBe(true);
+  });
+
+  it('resolves headings that share a long prefix', () => {
+    // "How your mind tends to work" and "How you handle different situations"
+    // diverge only at the 7th character.
+    expect(matchSectionTitle('## How your mind tends to work')).toBe('How your mind tends to work');
+    expect(matchSectionTitle('## How you handle different situations')).toBe(
+      'How you handle different situations',
+    );
+    const splitter = createSectionSplitter();
+    for (const piece of '## How you'.split('')) splitter.push(piece);
+    expect(splitter.snapshot()).toHaveLength(1);
+    splitter.push('r mind tends to work\nbody.');
+    expect(splitter.snapshot().map((s) => s.title)).toEqual([null, 'How your mind tends to work']);
   });
 
   it('withholds a complete heading whose newline has not landed', () => {
-    expect(couldContinueHeading('## Levers')).toBe(true);
+    expect(couldContinueHeading('## Things you can try')).toBe(true);
   });
 
   it('releases ordinary prose and dead-end hash lines', () => {
@@ -237,9 +257,9 @@ describe('createSectionSplitter', () => {
     const { final } = stream(SIX_SECTION_STREAM, 7);
     expect(final.map((s) => s.title)).toEqual([null, ...SECTION_TITLES]);
     expect(final).toHaveLength(7);
-    expect(final[5].title).toBe('How this reading was made');
-    expect(final[5].body.trim()).toBe('body of How this reading was made.');
-    expect(final[6].title).toBe('What this report cannot know');
+    expect(final[5].title).toBe('Where this report comes from');
+    expect(final[5].body.trim()).toBe('body of Where this report comes from.');
+    expect(final[6].title).toBe("What this report can't tell you");
   });
 
   it('agrees with the batch splitter at every chunk size', () => {
@@ -254,21 +274,21 @@ describe('createSectionSplitter', () => {
   it('never prints a half-arrived heading as prose', () => {
     // Stop mid-heading and inspect what the view would render right then.
     const splitter = createSectionSplitter();
-    splitter.push('body text\n## Under pre');
+    splitter.push('body text\n## When thing');
     const mid = splitter.snapshot();
     expect(mid).toHaveLength(1);
     expect(mid[0].body).toBe('body text');
     // The rest of the heading arrives: now it is a section, not prose.
-    splitter.push('ssure\nFe is the floor.');
+    splitter.push('s get stressful\nFe is the floor.');
     splitter.end();
     const done = splitter.snapshot();
-    expect(done.map((s) => s.title)).toEqual([null, 'Under pressure']);
+    expect(done.map((s) => s.title)).toEqual([null, 'When things get stressful']);
     expect(done[1].body).toBe('Fe is the floor.');
   });
 
   it('streams ordinary prose through immediately, without waiting for a newline', () => {
     const splitter = createSectionSplitter();
-    splitter.push('## Levers\nYour tied Ne/Se pair is');
+    splitter.push('## Things you can try\nYour tied Ne/Se pair is');
     expect(splitter.snapshot()[1].body).toBe('Your tied Ne/Se pair is');
   });
 

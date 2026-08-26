@@ -15,7 +15,13 @@
  * runs, so no model output can inject markup.
  */
 
-import { applyTagChips, createTagLegend } from './tags';
+import { applyTagChips } from './tags';
+import {
+  createThinkingPanel,
+  THINKING_STATUS,
+  WRITING_STATUS,
+  type ThinkingPanelApi,
+} from './ThinkingPanel';
 
 /* ------------------------------------------------------------------ *
  * Section splitting
@@ -26,12 +32,12 @@ import { applyTagChips, createTagLegend } from './tags';
  * (05 §5.1, sections 2-7; section 1 is code-rendered by SignatureView).
  */
 export const SECTION_TITLES: readonly string[] = [
-  'How your processing runs',
-  'Where you are right now',
-  'Under pressure',
-  'Levers',
-  'How this reading was made',
-  'What this report cannot know',
+  'How your mind tends to work',
+  'How you handle different situations',
+  'When things get stressful',
+  'Things you can try',
+  'Where this report comes from',
+  "What this report can't tell you",
 ];
 
 const HEADINGS = SECTION_TITLES.map((title) => `## ${title}`);
@@ -54,7 +60,7 @@ export function matchSectionTitle(line: string): string | null {
 
 /**
  * True while an unterminated trailing line could still turn into a heading, so
- * a half-delivered "## Under pres" - or a complete "## Levers" whose newline has
+ * a half-delivered "## When things" - or a complete "## Things you can try" whose newline has
  * not arrived - is withheld instead of being printed as prose.
  */
 export function couldContinueHeading(tail: string): boolean {
@@ -308,8 +314,11 @@ interface SectionCard {
 }
 
 export interface ReportView {
-  /** The whole report block: banners, status, tag legend, section cards. */
+  /** The whole report block: banners, status, thinking panel, section cards. */
   element: HTMLElement;
+  /** A delta of the model's raw reasoning (the `thinking` event). */
+  appendThinking(text: string): void;
+  /** A delta of report content (the `chunk` event). */
   append(text: string): void;
   finish(): void;
   setStatus(text: string | null): void;
@@ -323,9 +332,10 @@ export function createReportView(): ReportView {
   const banners = el('div', 'stack-flow');
   const statusHost = el('div', 'status');
   statusHost.setAttribute('aria-live', 'polite');
-  const legend = createTagLegend();
+  // The thinking panel is mounted lazily, above the section cards.
+  const thinkingHost = el('div');
   const sectionHost = el('div', 'stack-flow');
-  element.append(banners, statusHost, legend, sectionHost);
+  element.append(banners, statusHost, thinkingHost, sectionHost);
 
   const cards = new Map<number, SectionCard>();
   const caret = el('span', 'caret');
@@ -338,6 +348,10 @@ export function createReportView(): ReportView {
   let frame = 0;
   let flatNoticeShown = false;
   let errorCard: HTMLElement | null = null;
+  /** The live reasoning panel; created on the first thinking delta. */
+  let thinking: ThinkingPanelApi | null = null;
+  /** Whether the thinking panel ever took over the status line. */
+  let thinkingOwnsStatus = false;
   /** Set once an error event arrives; suppresses the empty-report placeholder. */
   let errored = false;
   /** The placeholder card, so an error arriving later can withdraw it. */
@@ -400,6 +414,12 @@ export function createReportView(): ReportView {
         : (setTimeout(paint, 16) as unknown as number);
   };
 
+  const setStatus = (text: string | null): void => {
+    statusHost.replaceChildren();
+    if (text === null) return;
+    statusHost.append(spinner(), el('span', undefined, text));
+  };
+
   const banner = (kind: 'warn' | 'calm', title: string): HTMLElement => {
     const box = el('div', `banner ${kind}`);
     const head = el('div', 'banner-head');
@@ -415,14 +435,37 @@ export function createReportView(): ReportView {
   return {
     element,
 
+    appendThinking(text: string) {
+      if (text === '') return;
+      if (!thinking) {
+        thinking = createThinkingPanel();
+        thinkingHost.appendChild(thinking.element);
+      }
+      thinking.push(text);
+      // The reasoning phase can run for minutes; the panel plus this line are the
+      // live feedback that replaces a blank spinner - but only until content flows.
+      if (!anyText) {
+        thinkingOwnsStatus = true;
+        setStatus(THINKING_STATUS);
+      }
+    },
+
     append(text: string) {
+      const firstContent = !anyText && text.trim() !== '';
       if (text.trim() !== '') anyText = true;
+      if (firstContent) {
+        // Real report content has started: collapse the scratch work so the
+        // report is the focus (still re-expandable), and hand the status line back.
+        thinking?.noteContent();
+        if (thinkingOwnsStatus) setStatus(WRITING_STATUS);
+      }
       splitter.push(text);
       schedule();
     },
 
     finish() {
       streaming = false;
+      thinking?.flush();
       splitter.end();
       paint();
       /*

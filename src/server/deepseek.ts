@@ -6,21 +6,75 @@
  * shift; hardcoding one would rot). Temperature is held at 0.5: high enough to keep the
  * prose from flattening into one voice across profiles, low enough to curb the flattery
  * drift documented for higher temperatures.
+ *
+ * REASONING: deepseek-v4-flash is a hybrid reasoning model. It emits `reasoning_content`
+ * (thinking) alongside `content` (the answer). Thinking is switched with the documented
+ * `thinking: { type: 'enabled' | 'disabled' }` parameter and is ON and UNBOUNDED by default
+ * (user requirement). `reasoning_content` is streamed to the reader as a separate `thinking`
+ * SSE event (see routes/generate.ts) — clearly labeled raw scratch work, and NEVER buffered,
+ * audited, or given the disclaimer; only `content` is the report. Empty/truncated failure
+ * modes are judged on content alone (see `classifyStreamOutcome`). Because thinking tokens
+ * are billed against `max_tokens`, MAX_COMPLETION_TOKENS is set to the model ceiling and
+ * TIMEOUT_MS is wide. Set DEEPSEEK_REASONING_EFFORT=none for a fast, cheap no-thinking pass.
  */
 
 import OpenAI from 'openai';
+import type { ReasoningEffort } from 'openai/resources/shared';
 
 export const DEFAULT_MODEL = 'deepseek-v4-flash';
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 export const TEMPERATURE = 0.5;
-export const TIMEOUT_MS = 90_000;
+// Total wall-clock budget per attempt. Unbounded thinking is on by default, and on a large
+// prompt the model can think for minutes before it writes a single byte (nothing streams
+// during the thinking phase). 600s gives that room while still capping a genuinely hung
+// connection. Set DEEPSEEK_REASONING_EFFORT=none for the fast (~48s) no-thinking path.
+export const TIMEOUT_MS = 600_000;
+// Pre-stream retries for transient failures (connection reset, 429, 5xx). Only ever
+// attempted before the first byte reaches the client, so a retry can never double a
+// partial report. Short backoff gives a momentary network blip time to clear.
+export const MAX_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = [250, 750];
 
 /**
  * Completion cap. The comprehensive format has a 2000-word hard floor and a 2200-3000
  * word target, which is roughly 3000-4500 output tokens; 8000 leaves room for a long
- * profile plus the verbatim disclaimer without truncating mid-section.
+ * profile plus the verbatim disclaimer without truncating mid-section — comfortable, but
+ * only because reasoning tokens no longer compete for the same budget.
  */
-export const MAX_COMPLETION_TOKENS = 8000;
+// Reasoning is ON by default (see DEFAULT_REASONING_EFFORT). The model's hidden thinking
+// tokens are billed against this same budget, so it must cover BOTH the reasoning pass
+// (a few thousand tokens on a rich profile) AND the 2000-3000 word report (~4500 tokens).
+// 16000 leaves comfortable headroom; the truncation guard catches the rare overrun.
+export const MAX_COMPLETION_TOKENS = 32000;
+
+/**
+ * Thinking ON but BOUNDED by default. It was unbounded ("let the LLM judge itself"), but on
+ * a 16k-token prompt the model deliberated for minutes — too slow in practice — so the
+ * default is now the shortest effort, `minimal`: the thinking panel still shows real
+ * reasoning, but the model is told to keep it brief. Per the DeepSeek docs, reasoning is
+ * switched with the dedicated `thinking: { type: 'enabled' | 'disabled' }` parameter (see
+ * buildChatRequest); `reasoning_effort` is a SEPARATE cap sent alongside it.
+ *
+ * Control with DEEPSEEK_REASONING_EFFORT (tune without a code change; restart to apply):
+ *   `none`    → OFF — fastest (~48s), no thinking panel content;
+ *   `minimal` → shortest thinking (the default);
+ *   `low` / `medium` / `high` → progressively more (and slower);
+ *   `default` → unbounded — the model decides (slowest; can take minutes).
+ */
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort | null = 'minimal';
+
+/** The sentinel that means "send no reasoning_effort at all". */
+export const OMIT_REASONING_EFFORT = 'default';
+
+const REASONING_EFFORTS: readonly string[] = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
 
 export interface DeepSeekConfig {
   apiKey: string;
@@ -37,6 +91,28 @@ export class DeepSeekError extends Error {
     this.name = 'DeepSeekError';
     this.status = options?.status;
     this.retryable = options?.retryable ?? false;
+  }
+}
+
+/**
+ * The model stopped because it hit the output cap. The report is incomplete, and the
+ * route reports it rather than passing a truncated report off as finished.
+ */
+export class DeepSeekTruncatedError extends DeepSeekError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeepSeekTruncatedError';
+  }
+}
+
+/**
+ * The stream carried no report text at all. This is the empty-report defect: with hybrid
+ * reasoning enabled the model can spend the whole budget thinking and emit no content.
+ */
+export class DeepSeekEmptyReportError extends DeepSeekError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeepSeekEmptyReportError';
   }
 }
 
@@ -69,51 +145,186 @@ export interface StreamRequest {
 }
 
 /**
- * Streams the completion as text deltas.
+ * One item off the stream. Two kinds travel the same channel, tagged so the route can
+ * route each to its own SSE event:
+ *   - `content`  — a `delta.content` piece: the report itself, buffered and audited.
+ *   - `thinking` — a `delta.reasoning_content` piece: the model's raw reasoning, streamed
+ *                  to the reader verbatim but never part of the report (not buffered, not
+ *                  audited, no disclaimer).
  *
- * One retry, and only on 429 or 5xx, and only before the first delta has been yielded —
- * once bytes have reached the client there is nothing to rewind.
+ * Empty/truncation detection judges CONTENT only — thinking is never report text — so the
+ * `contentChars`/`reasoningChars` bookkeeping and `classifyStreamOutcome` are unchanged.
  */
-export async function* streamReport(request: StreamRequest): AsyncGenerator<string> {
+export interface StreamReportItem {
+  kind: 'content' | 'thinking';
+  text: string;
+}
+
+/**
+ * Resolve the reasoning setting from the environment. Returns null when the parameter must
+ * be omitted entirely, so the model applies its own default.
+ *
+ * An unrecognized value falls back to the default rather than being forwarded: a typo in a
+ * deploy variable should not turn thinking back on and empty the report again.
+ */
+export function resolveReasoningEffort(raw?: string | null): ReasoningEffort | null {
+  const value = (raw ?? '').trim();
+  if (value === '') return DEFAULT_REASONING_EFFORT; // unset → unbounded thinking (null)
+  if (value === OMIT_REASONING_EFFORT) return null; // 'default' → unbounded thinking
+  if (REASONING_EFFORTS.includes(value)) return value as ReasoningEffort; // 'none' = off; level = capped
+  return DEFAULT_REASONING_EFFORT; // typo → the default (unbounded), never a surprise cap
+}
+
+export interface ChatRequestInput {
+  model: string;
+  system: string;
+  user: string;
+  maxTokens?: number;
+  reasoningEffort?: string | null;
+}
+
+/**
+ * The exact request body, built as a pure function so the reasoning-effort policy is
+ * testable without a paid call.
+ */
+export function buildChatRequest(input: ChatRequestInput) {
+  const effort = resolveReasoningEffort(input.reasoningEffort);
+  // 'none' is the one value that turns thinking OFF; everything else (a level, or null for
+  // unbounded) turns it ON via the documented `thinking` switch.
+  const thinkingOn = effort !== 'none';
+  return {
+    model: input.model,
+    temperature: TEMPERATURE,
+    stream: true as const,
+    max_tokens: input.maxTokens ?? MAX_COMPLETION_TOKENS,
+    // The DeepSeek-documented on/off switch for hybrid reasoning.
+    thinking: { type: thinkingOn ? ('enabled' as const) : ('disabled' as const) },
+    // A cap is sent ONLY when thinking is on AND an explicit level was chosen; unbounded
+    // (null) sends no cap, so the model decides how much to think.
+    ...(thinkingOn && effort !== null ? { reasoning_effort: effort } : {}),
+    messages: [
+      { role: 'system' as const, content: input.system },
+      { role: 'user' as const, content: input.user },
+    ],
+  };
+}
+
+export interface StreamOutcome {
+  /** Characters of `content` actually forwarded to the reader. */
+  contentChars: number;
+  /** Characters of `reasoning_content` seen and discarded. */
+  reasoningChars: number;
+  finishReason: string | null;
+}
+
+/**
+ * Decide whether a completed stream is usable. Returns the error to raise, or null.
+ *
+ * This is the guard against the empty-report defect recurring silently: a stream that ends
+ * on `length`, or that carried no content at all, is a failure even though the HTTP call
+ * succeeded.
+ */
+export function classifyStreamOutcome(outcome: StreamOutcome): DeepSeekError | null {
+  const spentThinking =
+    outcome.reasoningChars > 0
+      ? ' The model spent part of its output budget on internal reasoning; set ' +
+        'DEEPSEEK_REASONING_EFFORT=none to stop that.'
+      : '';
+
+  if (outcome.contentChars === 0) {
+    return new DeepSeekEmptyReportError(
+      'The report generator returned no report text.' +
+        spentThinking +
+        ' Nothing was written, so there is nothing to show — please try again.',
+    );
+  }
+
+  if (outcome.finishReason === 'length') {
+    return new DeepSeekTruncatedError(
+      'The report was cut off before it finished: the generator hit its output limit ' +
+        `(finish_reason "length") after about ${Math.round(outcome.contentChars / 6)} words.` +
+        spentThinking +
+        ' What you can see above is real, but the closing sections are missing.',
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Streams the completion as tagged items (see `StreamReportItem`).
+ *
+ * One retry, and only on 429 or 5xx, and only before the first item has reached the client
+ * — once anything (thinking or content) has streamed there is nothing to rewind, and a
+ * retry would replay the model's reasoning from scratch.
+ *
+ * `reasoning_content` deltas are surfaced as `thinking` items and counted, but never mixed
+ * into the report: they are the model thinking aloud, and the route keeps them out of the
+ * buffer that guards and the disclaimer see.
+ */
+export async function* streamReport(request: StreamRequest): AsyncGenerator<StreamReportItem> {
   const config = readConfig();
   // maxRetries: 0 — the retry policy is the one below (exactly one, and only before the
-  // first delta reaches the client), not the SDK's default of two silent replays.
+  // first item reaches the client), not the SDK's default of two silent replays.
   const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL, maxRetries: 0 });
 
   let attempt = 0;
   for (;;) {
     attempt += 1;
     let yielded = false;
+    let contentChars = 0;
+    let reasoningChars = 0;
+    let finishReason: string | null = null;
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), TIMEOUT_MS);
     const signal = composeSignals(timeout.signal, request.signal);
 
     try {
       const stream = await client.chat.completions.create(
-        {
+        buildChatRequest({
           model: config.model,
-          temperature: TEMPERATURE,
-          stream: true,
-          max_tokens: request.maxTokens ?? MAX_COMPLETION_TOKENS,
-          messages: [
-            { role: 'system', content: request.system },
-            { role: 'user', content: request.user },
-          ],
-        },
+          system: request.system,
+          user: request.user,
+          ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+          reasoningEffort: process.env.DEEPSEEK_REASONING_EFFORT,
+        }),
         { signal },
       );
 
       for await (const chunk of stream) {
-        const delta = chunk.choices?.[0]?.delta?.content;
-        if (typeof delta === 'string' && delta.length > 0) {
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        if (choice.finish_reason) finishReason = choice.finish_reason;
+
+        // Hybrid-reasoning field, not in the SDK's types: surface it as `thinking`, and
+        // count it toward reasoningChars (never contentChars, so it can't mask an empty
+        // report). Any item on the wire counts as `yielded`: a retry would replay it.
+        const reasoning = (choice.delta as { reasoning_content?: unknown } | undefined)
+          ?.reasoning_content;
+        if (typeof reasoning === 'string' && reasoning.length > 0) {
+          reasoningChars += reasoning.length;
           yielded = true;
-          yield delta;
+          yield { kind: 'thinking', text: reasoning };
+        }
+
+        const delta = choice.delta?.content;
+        if (typeof delta === 'string' && delta.length > 0) {
+          contentChars += delta.length;
+          yielded = true;
+          yield { kind: 'content', text: delta };
         }
       }
+
+      const outcome = classifyStreamOutcome({ contentChars, reasoningChars, finishReason });
+      if (outcome) throw outcome;
       return;
     } catch (error) {
       const failure = describe(error, timeout.signal.aborted);
-      if (attempt === 1 && !yielded && failure.retryable) continue;
+      if (attempt < MAX_ATTEMPTS && !yielded && failure.retryable) {
+        const backoff = RETRY_BACKOFF_MS[attempt - 1] ?? 0;
+        if (backoff > 0) await new Promise((resolve) => setTimeout(resolve, backoff));
+        continue;
+      }
       throw failure;
     } finally {
       clearTimeout(timer);
@@ -175,8 +386,11 @@ function describe(error: unknown, timedOut: boolean): DeepSeekError {
     return new DeepSeekError('The report request was cancelled.', { retryable: false });
   }
 
+  // Network-layer failure with no HTTP status: DNS, TCP reset, TLS, connection refused.
+  // These are usually transient, so allow the pre-stream retry loop to try again before
+  // surfacing the error to the reader.
   return new DeepSeekError(
     'The report generator could not be reached. Try again shortly.',
-    { ...(typeof status === 'number' && Number.isFinite(status) ? { status } : {}), retryable: false },
+    { ...(typeof status === 'number' && Number.isFinite(status) ? { status } : {}), retryable: true },
   );
 }

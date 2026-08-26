@@ -1,6 +1,7 @@
 /**
- * The input surface: eight scores grouped by axis pair, plus the optional 5W1H
- * intake (04 §a, questions quoted verbatim).
+ * The input surface: eight scores, grouped by axis pair. That is the whole
+ * form - the report's situational material is generated server-side from the
+ * geometry, so there is nothing for the person to describe.
  *
  * The form never corrects, clamps or reorders anything. It hands raw strings to
  * validateScores (02 §1) and lets the confirm dialog decide what happens to an
@@ -8,7 +9,7 @@
  */
 
 import { AXIS_KEYS, AXIS_MEMBERS, type AxisKey, type FunctionKey } from '../../shared/geometry/types';
-import { CONTEXT_KEYS, type ContextKey, type RawScores, type ReportContext } from '../api';
+import type { RawScores } from '../api';
 
 /** Code plus the full name, as both the form label and the signature legend. */
 export const FUNCTION_NAMES: Readonly<Record<FunctionKey, string>> = {
@@ -29,50 +30,6 @@ export const AXIS_LABELS: Readonly<Record<AxisKey, string>> = {
   'Te-Fi': 'Te – Fi',
 };
 
-/** 04 §a, verbatim: the six questions and what each one feeds. */
-interface ContextField {
-  key: ContextKey;
-  label: string;
-  question: string;
-}
-
-const CONTEXT_FIELDS: readonly ContextField[] = [
-  {
-    key: 'who',
-    label: 'WHO — relational field',
-    question:
-      'Who is in this with you, and what do they expect of you? (alone / one familiar person / small team / strangers / an evaluator or authority)',
-  },
-  {
-    key: 'what',
-    label: 'WHAT — task type',
-    question: 'What must you actually produce or handle? One sentence.',
-  },
-  {
-    key: 'when',
-    label: 'WHEN — timeframe and pressure',
-    question:
-      'How much time is there, and who set the clock? (open-ended / self-imposed / hard external deadline / unfolding in real time)',
-  },
-  {
-    key: 'where',
-    label: 'WHERE — setting and constraints',
-    question: 'Where does this happen — and can you leave, pause, or reshape the setting?',
-  },
-  {
-    key: 'why',
-    label: 'WHY — stakes and motivation',
-    question:
-      'What happens if it goes badly? Do you personally care, or is the pressure external?',
-  },
-  {
-    key: 'how',
-    label: 'HOW — methods and autonomy',
-    question:
-      'Can you choose your own method and pace, or must you follow someone else’s procedure and tools?',
-  },
-];
-
 /** The worked example threaded through the docs (02 §5 / 05 §5.7, Profile A). */
 export const EXAMPLE_SCORES: Readonly<Record<FunctionKey, number>> = {
   Ni: 39.6,
@@ -92,8 +49,6 @@ export interface InputFormApi {
   element: HTMLElement;
   /** Raw, untouched strings - parsing and range checks belong to validation. */
   readScores(): RawScores;
-  /** Null when all six fields are blank. */
-  readContext(): ReportContext | null;
   setBusy(busy: boolean): void;
   markInvalid(fns: readonly FunctionKey[]): void;
   showErrors(messages: readonly string[]): void;
@@ -164,47 +119,6 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
     card.appendChild(group);
   }
 
-  /* ---- optional 5W1H intake ---- */
-
-  const details = el('details', 'context');
-  const summary = el('summary');
-  summary.appendChild(el('span', undefined, 'Your current situation (optional)'));
-  details.appendChild(summary);
-
-  const body = el('div', 'context-body');
-  body.appendChild(
-    el(
-      'p',
-      'card-sub',
-      'Skip this and the report uses two or three common contexts and says so. Fill it in and ' +
-        'section 3 is built around your actual situation.',
-    ),
-  );
-
-  const contextInputs = new Map<ContextKey, ValueElement>();
-  for (const field of CONTEXT_FIELDS) {
-    const wrap = el('div', 'field');
-    const id = `ctx-${field.key}`;
-
-    const label = el('label', 'field-label');
-    label.setAttribute('for', id);
-    label.textContent = field.label;
-    wrap.appendChild(label);
-    wrap.appendChild(el('span', 'q', field.question));
-
-    const area = document.createElement('wired-textarea') as ValueElement;
-    area.setAttribute('id', id);
-    area.setAttribute('rows', '2');
-    area.setAttribute('name', field.key);
-    area.setAttribute('aria-label', field.label);
-    wrap.appendChild(area);
-
-    contextInputs.set(field.key, area);
-    body.appendChild(wrap);
-  }
-  details.appendChild(body);
-  card.appendChild(details);
-
   /* ---- actions ---- */
 
   const errors = el('div', 'form-errors');
@@ -233,17 +147,6 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
       const raw: RawScores = {};
       for (const [fn, input] of scoreInputs) raw[fn] = input.value.trim();
       return raw;
-    },
-
-    readContext(): ReportContext | null {
-      const context = {} as ReportContext;
-      let filled = false;
-      for (const key of CONTEXT_KEYS) {
-        const value = (contextInputs.get(key)?.value ?? '').trim();
-        context[key] = value;
-        if (value !== '') filled = true;
-      }
-      return filled ? context : null;
     },
 
     setBusy(busy: boolean) {

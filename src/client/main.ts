@@ -13,7 +13,7 @@ import 'wired-elements';
 import { computeSignature } from '../shared/geometry';
 import { validateScores } from '../shared/validation';
 import type { Scores } from '../shared/geometry/types';
-import { generateReport, type GenerateRequest, type ReportContext } from './api';
+import { generateReport, type GenerateRequest } from './api';
 import { createInputForm } from './ui/InputForm';
 import { createSignatureView } from './ui/SignatureView';
 import { createReportView } from './ui/ReportView';
@@ -77,10 +77,10 @@ async function submit(): Promise<void> {
     form.markInvalid([]);
   }
 
-  await run(result.scores, form.readContext());
+  await run(result.scores);
 }
 
-async function run(scores: Scores, context: ReportContext | null): Promise<void> {
+async function run(scores: Scores): Promise<void> {
   running = true;
   form.setBusy(true);
   outputSlot.replaceChildren();
@@ -114,7 +114,7 @@ async function run(scores: Scores, context: ReportContext | null): Promise<void>
 
   outputSlot.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-  const request: GenerateRequest = { scores, context };
+  const request: GenerateRequest = { scores };
   let failed = false;
 
   await generateReport(request, {
@@ -123,6 +123,9 @@ async function run(scores: Scores, context: ReportContext | null): Promise<void>
         report.showFlatNotice();
         report.setStatus('writing the short, honest version…');
       }
+    },
+    onThinking(text) {
+      report.appendThinking(text);
     },
     onChunk(text) {
       report.append(text);
@@ -136,7 +139,7 @@ async function run(scores: Scores, context: ReportContext | null): Promise<void>
       // The error card first, so the reason is on screen before anything else;
       // finish() then flushes whatever prose did arrive before the failure.
       report.showError(error.message, () => {
-        void run(scores, context);
+        void run(scores);
       });
       report.finish();
     },
@@ -153,9 +156,10 @@ async function run(scores: Scores, context: ReportContext | null): Promise<void>
 }
 
 /*
- * wired-elements measure their sketch geometry from the layout box. Cards watch
- * themselves with a ResizeObserver; inputs and textareas do not, so nudge every
- * wired element after a viewport change (orientation, keyboard, desktop resize).
+ * wired-elements measure their sketch geometry from the layout box. Cards and
+ * inputs watch themselves with a ResizeObserver, buttons and dividers do not, so
+ * nudge every wired element after a viewport change (orientation, on-screen
+ * keyboard, desktop resize).
  */
 let redrawTimer = 0;
 window.addEventListener(
@@ -164,7 +168,7 @@ window.addEventListener(
     window.clearTimeout(redrawTimer);
     redrawTimer = window.setTimeout(() => {
       const wired = document.querySelectorAll<HTMLElement & { wiredRender?: (f: boolean) => void }>(
-        'wired-input, wired-textarea, wired-button, wired-card, wired-divider',
+        'wired-input, wired-button, wired-card, wired-divider',
       );
       wired.forEach((node) => node.wiredRender?.(true));
     }, 180);

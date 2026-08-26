@@ -6,7 +6,7 @@
  * port and nothing else.
  */
 
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -14,6 +14,28 @@ import { Hono } from 'hono';
 
 import { generateRoute } from './routes/generate';
 import { isConfigured } from './deepseek';
+
+/*
+ * Load the repo-root .env before anything reads process.env.
+ *
+ * Resolved from import.meta.url, not cwd, so `npm start`, `tsx src/server/index.ts` and a
+ * launch from any other directory all find the same file. The file is optional: a missing
+ * .env throws, and that is fine — geometry, section 1 and flat-profile reports never need
+ * a key (see GET /api/health for which state the server is in).
+ *
+ * Verified on Node 22.17: process.loadEnvFile does NOT override variables already present
+ * in process.env, so a value exported in the shell or passed on the command line wins over
+ * the file. That is the precedence we want for deploys and for tests.
+ *
+ * This runs after the imports above by ESM evaluation order, which is safe only because no
+ * imported module reads process.env at module scope — deepseek.ts reads it inside
+ * readConfig()/isConfigured(), both called per request. Keep it that way.
+ */
+try {
+  process.loadEnvFile(fileURLToPath(new URL('../../.env', import.meta.url)));
+} catch {
+  /* .env is optional. */
+}
 
 export const app = new Hono();
 

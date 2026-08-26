@@ -8,7 +8,7 @@
  * fixture (test/client.sse.test.ts).
  *
  * Contract (fixed; the server is built against the same one):
- *   request  POST /api/generate  { scores, context }
+ *   request  POST /api/generate  { scores }
  *   response text/event-stream
  *              event: meta   data: {"regime":"NORMAL","llm":true}
  *              event: chunk  data: {"text":"..."}            (repeated)
@@ -24,22 +24,13 @@ import type { FunctionKey, Scores } from '../shared/geometry/types';
  * Request / event payloads
  * ------------------------------------------------------------------ */
 
-/** The optional 5W1H intake (04 §a). Sent as null when every field is blank. */
-export interface ReportContext {
-  who: string;
-  what: string;
-  when: string;
-  where: string;
-  why: string;
-  how: string;
-}
-
-export const CONTEXT_KEYS = ['who', 'what', 'when', 'where', 'why', 'how'] as const;
-export type ContextKey = (typeof CONTEXT_KEYS)[number];
-
+/**
+ * The whole request. Eight scores, nothing else: the report's situational
+ * material is generated server-side from the geometry, so there is nothing for
+ * the person to fill in and nothing else to send.
+ */
 export interface GenerateRequest {
   scores: Scores;
-  context: ReportContext | null;
 }
 
 export interface MetaPayload {
@@ -60,6 +51,12 @@ export interface ErrorPayload {
 /** Every callback may be async; the reader awaits each one before continuing. */
 export interface StreamHandlers {
   onMeta?(meta: MetaPayload): void | Promise<void>;
+  /**
+   * A delta of the model's raw reasoning (the `thinking` event). Separate from
+   * onChunk on purpose: this is unfiltered scratch work, never report content,
+   * and the two must never be conflated in the UI.
+   */
+  onThinking?(text: string): void | Promise<void>;
   onChunk?(text: string): void | Promise<void>;
   onAudit?(audit: AuditPayload): void | Promise<void>;
   onError?(error: ErrorPayload): void | Promise<void>;
@@ -190,6 +187,12 @@ export async function dispatchFrame(
       });
       return 'continue';
     }
+    case 'thinking': {
+      const record = asRecord(parseJson(frame.data));
+      const text = typeof record?.text === 'string' ? record.text : '';
+      if (text) await handlers.onThinking?.(text);
+      return 'continue';
+    }
     case 'chunk': {
       const record = asRecord(parseJson(frame.data));
       const text = typeof record?.text === 'string' ? record.text : '';
@@ -234,20 +237,6 @@ export interface GenerateOptions {
 
 const GENERIC_FAILURE =
   'Could not reach the report generator. Check your connection and try again.';
-
-/**
- * Build the request body. Blank context fields are sent as empty strings; a
- * wholly blank intake is sent as null, which puts the server on its
- * computed-default-contexts path (05 §5.1 section 3).
- */
-export function buildRequest(scores: Scores, context: ReportContext | null): GenerateRequest {
-  return { scores, context };
-}
-
-export function contextIsEmpty(context: ReportContext | null): boolean {
-  if (!context) return true;
-  return CONTEXT_KEYS.every((key) => context[key].trim() === '');
-}
 
 /**
  * POST the profile and drive `handlers` from the response stream.

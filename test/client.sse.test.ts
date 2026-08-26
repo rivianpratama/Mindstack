@@ -19,7 +19,7 @@ import type { Scores } from '../src/shared/geometry/types';
 /** One complete, contract-shaped response: meta -> 3 chunks -> audit -> done. */
 const CANNED_STREAM =
   'event: meta\ndata: {"regime":"NORMAL","llm":true}\n\n' +
-  'event: chunk\ndata: {"text":"## How your processing runs\\n"}\n\n' +
+  'event: chunk\ndata: {"text":"## How your mind tends to work\\n"}\n\n' +
   'event: chunk\ndata: {"text":"One hypothesis to test [H] against a real week."}\n\n' +
   'event: chunk\ndata: {"text":"\\n\\n> **What this is** — and is not.\\n"}\n\n' +
   'event: audit\ndata: {"violations":["Section 4 has no counter-observation."]}\n\n' +
@@ -108,6 +108,7 @@ describe('dispatchFrame', () => {
     return {
       onMeta: vi.fn(),
       onChunk: vi.fn(),
+      onThinking: vi.fn(),
       onAudit: vi.fn(),
       onError: vi.fn(),
       onDone: vi.fn(),
@@ -122,13 +123,35 @@ describe('dispatchFrame', () => {
     }
     expect(handlers.onMeta).toHaveBeenCalledWith({ regime: 'NORMAL', llm: true });
     expect(handlers.onChunk).toHaveBeenCalledTimes(3);
-    expect(handlers.onChunk.mock.calls[0][0]).toBe('## How your processing runs\n');
+    expect(handlers.onChunk.mock.calls[0][0]).toBe('## How your mind tends to work\n');
     expect(handlers.onAudit).toHaveBeenCalledWith({
       violations: ['Section 4 has no counter-observation.'],
     });
     expect(handlers.onDone).toHaveBeenCalledTimes(1);
     expect(handlers.onError).not.toHaveBeenCalled();
     expect(outcomes).toEqual(['continue', 'continue', 'continue', 'continue', 'continue', 'done']);
+  });
+
+  it('routes thinking deltas to onThinking, never to onChunk', async () => {
+    const handlers = spyHandlers();
+    const stream =
+      'event: meta\ndata: {"regime":"NORMAL","llm":true}\n\n' +
+      'event: thinking\ndata: {"text":"Let me weigh the Ni spike against the tie..."}\n\n' +
+      'event: thinking\ndata: {"text":" and the Fe cliff."}\n\n' +
+      'event: chunk\ndata: {"text":"## How your mind tends to work\\n"}\n\n' +
+      'event: done\ndata: {}\n\n';
+    // Split fine to prove thinking frames survive arbitrary chunk boundaries too.
+    for (const frame of feed(stream, 7)) await dispatchFrame(frame, handlers);
+    expect(handlers.onThinking).toHaveBeenCalledTimes(2);
+    expect(handlers.onThinking.mock.calls[0][0]).toBe('Let me weigh the Ni spike against the tie...');
+    expect(handlers.onThinking.mock.calls[1][0]).toBe(' and the Fe cliff.');
+    // The report channel saw only the report heading — never the reasoning.
+    expect(handlers.onChunk).toHaveBeenCalledTimes(1);
+    expect(handlers.onChunk.mock.calls[0][0]).toBe('## How your mind tends to work\n');
+    for (const call of handlers.onChunk.mock.calls) {
+      expect(call[0]).not.toContain('weigh the Ni spike');
+    }
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
   });
 
   it('awaits async handlers before moving on', async () => {
@@ -196,7 +219,7 @@ describe('generateReport', () => {
     const chunks: string[] = [];
     const seen: string[] = [];
     await generateReport(
-      { scores, context: null },
+      { scores },
       {
         onMeta: () => void seen.push('meta'),
         onChunk: (text) => void chunks.push(text),
@@ -208,12 +231,17 @@ describe('generateReport', () => {
     );
 
     expect(seen).toEqual(['meta', 'audit', 'done']);
-    expect(chunks.join('')).toContain('## How your processing runs');
+    expect(chunks.join('')).toContain('## How your mind tends to work');
 
     expect(calls).toHaveLength(1);
     expect(calls[0][0]).toBe('/api/generate');
     expect(calls[0][1].method).toBe('POST');
-    expect(JSON.parse(String(calls[0][1].body))).toEqual({ scores, context: null });
+
+    // The body is the eight scores and nothing else: no situational context key
+    // is sent any more, so assert the exact key set, not just a subset.
+    const body = JSON.parse(String(calls[0][1].body)) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(['scores']);
+    expect(body.scores).toEqual(scores);
   });
 
   it('surfaces a 400 { error } body through onError', async () => {
@@ -224,7 +252,7 @@ describe('generateReport', () => {
       })) as unknown as typeof fetch;
 
     const onError = vi.fn();
-    await generateReport({ scores, context: null }, { onError }, { fetchImpl });
+    await generateReport({ scores }, { onError }, { fetchImpl });
     expect(onError).toHaveBeenCalledWith({ message: 'Fe must be a number.' });
   });
 
@@ -236,7 +264,7 @@ describe('generateReport', () => {
 
     const onError = vi.fn();
     const onChunk = vi.fn();
-    await generateReport({ scores, context: null }, { onChunk, onError }, { fetchImpl });
+    await generateReport({ scores }, { onChunk, onError }, { fetchImpl });
     expect(onChunk).toHaveBeenCalledWith('half a report');
     expect(onError.mock.calls[0][0].message).toMatch(/closed before the report finished/);
   });
@@ -255,7 +283,7 @@ describe('generateReport', () => {
     const order: string[] = [];
     const errors: string[] = [];
     await generateReport(
-      { scores, context: null },
+      { scores },
       {
         onMeta: () => void order.push('meta'),
         onChunk: () => void order.push('chunk'),
@@ -284,7 +312,7 @@ describe('generateReport', () => {
 
       const onError = vi.fn();
       const onDone = vi.fn();
-      await generateReport({ scores, context: null }, { onError, onDone }, { fetchImpl });
+      await generateReport({ scores }, { onError, onDone }, { fetchImpl });
 
       expect(onDone).not.toHaveBeenCalled();
       expect(onError).toHaveBeenCalledTimes(1);
@@ -305,7 +333,7 @@ describe('generateReport', () => {
 
     const onError = vi.fn();
     await expect(
-      generateReport({ scores, context: null }, { onError }, { fetchImpl }),
+      generateReport({ scores }, { onError }, { fetchImpl }),
     ).resolves.toBeUndefined();
     expect(onError.mock.calls[0][0].message).toMatch(/Could not reach/);
   });

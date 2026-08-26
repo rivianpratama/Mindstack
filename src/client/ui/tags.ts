@@ -29,29 +29,29 @@ export const TAG_TIERS: readonly TagTier[] = [
     id: 'S',
     label: '[S]',
     cls: 'tag tag-s',
-    short: 'cited science',
-    gloss: 'An established finding, cited to its source - the sturdiest thing here.',
+    short: 'backed by research',
+    gloss: 'Based on a real scientific study - the most reliable thing in this report.',
   },
   {
     id: 'D',
     label: '[D]',
     cls: 'tag tag-d',
-    short: 'typology folklore, unvalidated',
-    gloss: 'Taken from typology writers, attributed but never scientifically validated.',
+    short: 'personality-community idea, not tested',
+    gloss: 'An idea from personality writers - credited to them, but never scientifically tested.',
   },
   {
     id: 'D->H',
     label: '[D→H]',
     cls: 'tag tag-dh',
-    short: 'folklore, generalized by us',
-    gloss: 'A typology idea we stretched past what its source actually claimed.',
+    short: 'borrowed idea, stretched by us',
+    gloss: 'A personality-community idea that we stretched beyond what its source actually claimed.',
   },
   {
     id: 'H',
     label: '[H]',
     cls: 'tag tag-h',
-    short: 'our hypothesis',
-    gloss: 'Our own speculation - plausible, unproven, offered for you to test.',
+    short: 'our best guess',
+    gloss: 'Our own guess - sounds reasonable, but unproven. See if it matches your life.',
   },
 ];
 
@@ -80,45 +80,4 @@ export function applyTagChips(escapedHtml: string): string {
     const tier = CHIP_OF[key];
     return tier ? chipHtml(tier) : match;
   });
-}
-
-/** The persistent legend card that sits above the streamed report. */
-export function createTagLegend(): HTMLElement {
-  const card = document.createElement('wired-card');
-  card.className = 'legend-card';
-
-  const title = document.createElement('h2');
-  title.className = 'card-title';
-  title.textContent = 'How sure is each claim?';
-  card.appendChild(title);
-
-  const sub = document.createElement('p');
-  sub.className = 'card-sub';
-  sub.textContent =
-    'Every tagged sentence below carries exactly one of these four confidence tiers.';
-  card.appendChild(sub);
-
-  const list = document.createElement('dl');
-  list.className = 'legend-list';
-
-  for (const tier of TAG_TIERS) {
-    const item = document.createElement('div');
-    item.className = 'legend-item';
-
-    const term = document.createElement('dt');
-    term.innerHTML = chipHtml(tier);
-
-    const def = document.createElement('dd');
-    def.style.margin = '0';
-    const strong = document.createElement('b');
-    strong.textContent = tier.short;
-    def.appendChild(strong);
-    def.appendChild(document.createTextNode(` — ${tier.gloss}`));
-
-    item.append(term, def);
-    list.appendChild(item);
-  }
-
-  card.appendChild(list);
-  return card;
 }

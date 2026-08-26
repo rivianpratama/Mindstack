@@ -44,6 +44,11 @@ import {
 import { MAX_COMPLETION_TOKENS } from '../deepseek';
 import { SYSTEM_PROMPT } from './system-prompt';
 
+// Extra completion tokens reserved for the model's hidden reasoning pass (thinking is on
+// by default). Billed against the same max_tokens as the report, so it is added on top of
+// the prose budget rather than shared with it. Clamped by MAX_COMPLETION_TOKENS downstream.
+const REASONING_HEADROOM_TOKENS = 24000;
+
 /* ------------------------------------------------------------------ *
  * Public shapes
  * ------------------------------------------------------------------ */
@@ -88,7 +93,7 @@ export type FeatureKind =
   | 'balanced-lead'
   | 'jp-pressure'
   | 'jp-note'
-  | 'friction-map';
+  | 'scenarios';
 
 export interface RenderFeature {
   /** Stable identifier, also used as the merge key. */
@@ -112,14 +117,32 @@ export interface RenderFeature {
   instructions: string[];
 }
 
-/** One row of 04 §b's taxonomy, resolved against this profile's supply grades. */
-export interface DefaultContext {
+/** Which side of the supply ladder a generated scenario is built to land on. */
+export type ScenarioBand = 'flow' | 'stretch' | 'friction' | 'eruption-risk';
+
+/**
+ * A hypothetical situation the report generates for itself: one row of 04 §b's demand
+ * taxonomy, crossed with this profile's supply grade for the demanded function, plus a
+ * compact 5W1H frame for the model to open the vignette with.
+ *
+ * The situation is generic and the demand mapping comes from the taxonomy; only the
+ * *prediction* is profile-specific. Nothing here is personalization.
+ */
+export interface Scenario {
+  id: string;
+  band: ScenarioBand;
   row: number;
   demandType: string;
   demands: FunctionKey[];
   /** Supply grade of the row's primary demanded function, from the Signature. */
   supplyGrade: SupplyGrade;
   cues: string;
+  /** The 5W1H seed the vignette must open with (04 §a's six fields). */
+  frame: Record<ContextField, string>;
+  /** 04 §c escalation modifiers overlaid on the frame; only the eruption scenario has any. */
+  modifiers: string[];
+  /** The firm eruption candidate this scenario is built to load, when that is its job. */
+  eruptionFn: FunctionKey | null;
 }
 
 export interface SelectedFragment {
@@ -138,8 +161,11 @@ export interface Assembly {
   fragmentKeys: string[];
   fragments: SelectedFragment[];
   renderPlan: RenderFeature[];
-  contextProvided: boolean;
-  defaultContexts: DefaultContext[];
+  /**
+   * The self-generated 5W1H scenarios section 3 is built from. Always populated for an
+   * LLM path with resolved tiers; empty for STAIRCASE (no supply grades exist) and FLAT.
+   */
+  scenarios: Scenario[];
   systemPrompt: string;
   /** Empty string when `honestNull` — there is nothing to ask a model. */
   userPrompt: string;
@@ -165,6 +191,12 @@ interface TaxonomyRow {
   /** Primary demanded function first; the grade is read off the primary. */
   demands: FunctionKey[];
   cues: string;
+  /**
+   * A generic 5W1H situation that produces this demand, authored from the row's own cue
+   * and rationale columns. Generic on purpose: the situation is a hypothetical, and only
+   * the prediction about it is keyed to the profile.
+   */
+  frame: Record<ContextField, string>;
 }
 
 /**
@@ -173,18 +205,174 @@ interface TaxonomyRow {
  * default context; the taxonomy fragment still ships it to the model.
  */
 const TAXONOMY: readonly TaxonomyRow[] = [
-  { row: 1, demandType: 'Open-ended ideation', demands: ['Ne'], cues: 'WHAT = "come up with options"; HOW = free' },
-  { row: 2, demandType: 'Long-horizon synthesis', demands: ['Ni'], cues: 'WHAT = "figure out where this is going"; WHEN = open' },
-  { row: 3, demandType: 'Real-time responsiveness', demands: ['Se'], cues: 'WHEN = real time; WHERE = physical' },
-  { row: 4, demandType: 'Procedural reliability', demands: ['Si'], cues: 'HOW = fixed procedure; WHAT = maintenance' },
-  { row: 5, demandType: 'Precision systems analysis', demands: ['Ti'], cues: 'WHAT = "why is this broken / is this correct"' },
-  { row: 6, demandType: 'Resource mobilization', demands: ['Te'], cues: 'WHEN = deadline; WHAT = deliverable' },
-  { row: 7, demandType: 'Value arbitration', demands: ['Fi'], cues: 'WHY = personally charged; WHAT = ethical call' },
-  { row: 8, demandType: 'Group-atmosphere maintenance', demands: ['Fe'], cues: 'WHO = group, especially with tension' },
-  { row: 9, demandType: 'Emotional first response', demands: ['Fe', 'Fi'], cues: 'WHO = someone upset, now' },
-  { row: 10, demandType: 'Ambiguity holding', demands: ['Ne', 'Ni'], cues: 'WHAT = unresolved; WHEN = "too early to decide"' },
-  { row: 11, demandType: 'Closure under deadline', demands: ['Te', 'Fe'], cues: 'WHEN = hard deadline; WHO = waiting audience' },
-  { row: 12, demandType: 'Interruption multiplexing', demands: ['Se', 'Ne'], cues: 'WHERE = open/shared setting; WHEN = fragmented' },
+  {
+    row: 1,
+    demandType: 'Open-ended ideation',
+    demands: ['Ne'],
+    cues: 'WHAT = "come up with options"; HOW = free',
+    frame: {
+      who: 'you, or a small group with no fixed roles',
+      what: 'produce a spread of options for a problem nobody has framed yet',
+      when: 'open-ended — no clock set by anyone',
+      where: 'a setting you can reshape or step away from',
+      why: 'nothing is decided yet, and breadth is the point',
+      how: 'your own method; nothing is prescribed',
+    },
+  },
+  {
+    row: 2,
+    demandType: 'Long-horizon synthesis',
+    demands: ['Ni'],
+    cues: 'WHAT = "figure out where this is going"; WHEN = open',
+    frame: {
+      who: 'alone, reporting to nobody yet',
+      what: 'work out where a messy situation is actually heading',
+      when: 'open-ended',
+      where: 'private, few interruptions',
+      why: 'the direction matters more than the deadline',
+      how: 'full autonomy',
+    },
+  },
+  {
+    row: 3,
+    demandType: 'Real-time responsiveness',
+    demands: ['Se'],
+    cues: 'WHEN = real time; WHERE = physical',
+    frame: {
+      who: 'one or two people who look to whoever moves first',
+      what: 'handle a live situation while it is still changing',
+      when: 'unfolding in real time, seconds to minutes',
+      where: 'on site, physical, hard to leave',
+      why: 'something concrete is being lost right now',
+      how: 'improvise; no procedure covers it',
+    },
+  },
+  {
+    row: 4,
+    demandType: 'Procedural reliability',
+    demands: ['Si'],
+    cues: 'HOW = fixed procedure; WHAT = maintenance',
+    frame: {
+      who: 'a familiar team working to a set standard',
+      what: 'run a proven sequence exactly as written',
+      when: 'a routine cycle, repeated',
+      where: 'the usual place, the usual tools',
+      why: 'a deviation means rework for other people',
+      how: 'a fixed procedure; substitutions are errors',
+    },
+  },
+  {
+    row: 5,
+    demandType: 'Precision systems analysis',
+    demands: ['Ti'],
+    cues: 'WHAT = "why is this broken / is this correct"',
+    frame: {
+      who: 'alone now, explaining to others later',
+      what: 'find out why something is broken, or whether it is correct',
+      when: 'enough time to be thorough',
+      where: 'wherever you can concentrate',
+      why: 'a wrong answer propagates into everything downstream',
+      how: 'your own method',
+    },
+  },
+  {
+    row: 6,
+    demandType: 'Resource mobilization',
+    demands: ['Te'],
+    cues: 'WHEN = deadline; WHAT = deliverable',
+    frame: {
+      who: 'a small team, plus somebody waiting on delivery',
+      what: 'sequence people, time and tools until a deliverable ships',
+      when: 'a hard external deadline',
+      where: 'a shared workspace',
+      why: 'the delivery is visible to people who count on it',
+      how: 'the process is partly imposed on you',
+    },
+  },
+  {
+    row: 7,
+    demandType: 'Value arbitration',
+    demands: ['Fi'],
+    cues: 'WHY = personally charged; WHAT = ethical call',
+    frame: {
+      who: 'one person who will live with the result',
+      what: 'decide what you can personally stand behind when two good criteria collide',
+      when: 'soon, but you set the clock',
+      where: 'a private conversation',
+      why: 'you personally care how this lands',
+      how: 'no procedure covers it',
+    },
+  },
+  {
+    row: 8,
+    demandType: 'Group-atmosphere maintenance',
+    demands: ['Fe'],
+    cues: 'WHO = group, especially with tension',
+    frame: {
+      who: 'a small group carrying unspoken tension',
+      what: 'keep the shared mood workable while the work continues',
+      when: 'over days, not minutes',
+      where: 'a shared space you cannot simply leave',
+      why: 'the tension has started to cost the work',
+      how: 'nobody has given you a method',
+    },
+  },
+  {
+    row: 9,
+    demandType: 'Emotional first response',
+    demands: ['Fe', 'Fi'],
+    cues: 'WHO = someone upset, now',
+    frame: {
+      who: 'one person who is upset, in front of you',
+      what: 'respond to distress in the moment',
+      when: 'immediately; no preparation',
+      where: 'wherever it happens to happen',
+      why: 'they came to you rather than anyone else',
+      how: 'nothing to follow; you improvise',
+    },
+  },
+  {
+    row: 10,
+    demandType: 'Ambiguity holding',
+    demands: ['Ne', 'Ni'],
+    cues: 'WHAT = unresolved; WHEN = "too early to decide"',
+    frame: {
+      who: 'a group that wants an answer today',
+      what: 'keep an unresolved question genuinely open',
+      when: 'too early to decide well',
+      where: 'a recurring meeting',
+      why: 'closing early would cost more than waiting',
+      how: 'your call how to hold it open',
+    },
+  },
+  {
+    row: 11,
+    demandType: 'Closure under deadline',
+    demands: ['Te', 'Fe'],
+    cues: 'WHEN = hard deadline; WHO = waiting audience',
+    frame: {
+      who: 'an audience waiting on your decision',
+      what: 'commit publicly to a decision, on schedule',
+      when: 'a hard deadline that is nearly up',
+      where: 'a visible forum',
+      why: 'the delay itself has become the problem',
+      how: 'you state it and you own it',
+    },
+  },
+  {
+    row: 12,
+    demandType: 'Interruption multiplexing',
+    demands: ['Se', 'Ne'],
+    cues: 'WHERE = open/shared setting; WHEN = fragmented',
+    frame: {
+      who: 'several people pinging you independently',
+      what: 'reprioritize continuously as new things arrive',
+      when: 'fragmented, all day',
+      where: 'an open or shared setting',
+      why: 'several small things fail quietly if dropped',
+      how: 'no protection from interruption',
+    },
+  },
 ];
 
 /**
@@ -198,16 +386,26 @@ export const DEMAND_WEIGHTING_RULE =
   'grade; cap the demand profile at four demands.';
 
 /**
+ * 04 §c escalation modifiers, overlaid on the eruption scenario's 5W1H frame. Three of the
+ * five, so the "friction + >= 2 modifiers -> flag eruption risk" rule fires by construction.
+ */
+const ESCALATION_OVERLAY: readonly string[] = [
+  'WHEN (sustained duration): this repeats every day for two weeks, not once',
+  'WHERE (no exit): you cannot step out of it or reshape it',
+  'WHO (evaluative audience): somebody whose opinion of you matters is watching',
+];
+
+/**
  * The six headings the client's cards are keyed to, in order. Exact strings: the client
  * matches on them. Sections 2-7 of the report; section 1 is code-rendered.
  */
 export const REPORT_HEADINGS = [
-  '## How your processing runs',
-  '## Where you are right now',
-  '## Under pressure',
-  '## Levers',
-  '## How this reading was made',
-  '## What this report cannot know',
+  '## How your mind tends to work',
+  '## How you handle different situations',
+  '## When things get stressful',
+  '## Things you can try',
+  '## Where this report comes from',
+  "## What this report can't tell you",
 ] as const;
 
 /**
@@ -222,7 +420,7 @@ const DEPTH_CONTRACT =
   'go past the fragments: state what THIS feature together with the other fired features in ' +
   'the plan predicts that none of them predicts alone (how this person argues, decides, ' +
   'burns out, recovers). Tag every composed reading [H] and phrase it as an offered ' +
-  'hypothesis. Every paragraph names its geometric feature and its mechanism.';
+  'hypothesis. Every paragraph is grounded in a real feature and a real mechanism — named to yourself, described to the reader in plain everyday words with no number, grade, or code.';
 
 const BUDGET: Record<RenderMode, number> = {
   full: 350,
@@ -336,60 +534,95 @@ function compositionPair(signature: Signature): FunctionKey[] {
   return [];
 }
 
-const SUPPLY_ORDER: Record<SupplyGrade, number> = {
-  flow: 0,
-  'near-flow': 1,
-  'scaffolded-stretch': 2,
-  friction: 3,
-  fork: 4,
-  unrated: 5,
-};
-
 /**
- * 5W1H absent → two or three rows of 04 §b whose demanded functions span distinct
- * supply grades, preferring one flow, one stretch, one friction. Deterministic and
- * profile-specific, which the KB's lost "default context menu" was not.
+ * Generate the hypothetical situations section 3 is built from: three or four rows of
+ * 04 §b's taxonomy, crossed with this profile's supply grades so the set spans the ladder.
+ *
+ * Coverage contract, in this order:
+ *   1. flow      — a demand this profile's lead cluster supplies
+ *   2. stretch   — a demand landing in the support or reserve band
+ *   3. friction  — a demand landing on the shadow floor
+ *   4. eruption-risk — only when a FIRM eruption candidate exists: a second friction
+ *      scenario loading that function, with three 04 §c escalation modifiers overlaid.
+ *
+ * A band is skipped when this profile has nothing at that grade — a profile with no
+ * friction row genuinely has no friction scenario, and inventing one would be a lie.
  */
-export function computeDefaultContexts(signature: Signature): DefaultContext[] {
-  const rows: DefaultContext[] = TAXONOMY.map((row) => ({
-    row: row.row,
-    demandType: row.demandType,
-    demands: [...row.demands],
+export function computeScenarios(signature: Signature): Scenario[] {
+  const graded = TAXONOMY.map((row) => ({
+    row,
     supplyGrade: signature.supplyGrades[row.demands[0]!],
-    cues: row.cues,
   }));
 
-  const firstOf = (...grades: SupplyGrade[]): DefaultContext | null => {
+  const used = new Set<number>();
+  const scenarios: Scenario[] = [];
+
+  const build = (
+    entry: (typeof graded)[number],
+    band: ScenarioBand,
+    modifiers: readonly string[] = [],
+    eruptionFn: FunctionKey | null = null,
+  ): Scenario => ({
+    id: `scenario:${band}`,
+    band,
+    row: entry.row.row,
+    demandType: entry.row.demandType,
+    demands: [...entry.row.demands],
+    supplyGrade: entry.supplyGrade,
+    cues: entry.row.cues,
+    frame: { ...entry.row.frame },
+    modifiers: [...modifiers],
+    eruptionFn,
+  });
+
+  const takeFirst = (
+    band: ScenarioBand,
+    grades: readonly SupplyGrade[],
+    filter?: (entry: (typeof graded)[number]) => boolean,
+  ): void => {
     for (const grade of grades) {
-      const hit = rows.find((row) => row.supplyGrade === grade);
-      if (hit) return hit;
+      const hit = graded.find(
+        (entry) =>
+          entry.supplyGrade === grade && !used.has(entry.row.row) && (!filter || filter(entry)),
+      );
+      if (hit) {
+        used.add(hit.row.row);
+        scenarios.push(build(hit, band));
+        return;
+      }
     }
-    return null;
   };
 
-  const picked: DefaultContext[] = [];
-  const take = (candidate: DefaultContext | null) => {
-    if (!candidate) return;
-    if (picked.some((row) => row.row === candidate.row)) return;
-    if (picked.some((row) => row.supplyGrade === candidate.supplyGrade)) return;
-    picked.push(candidate);
-  };
+  takeFirst('flow', ['flow', 'near-flow']);
+  takeFirst('stretch', ['scaffolded-stretch', 'near-flow', 'fork']);
+  takeFirst('friction', ['friction']);
 
-  take(firstOf('flow', 'near-flow'));
-  take(firstOf('scaffolded-stretch', 'near-flow'));
-  take(firstOf('friction'));
-
-  // Fewer than two distinct grades reachable: widen to any remaining grade.
-  if (picked.length < 2) {
-    for (const row of rows) {
-      if (picked.length >= 2) break;
-      take(row);
+  /*
+   * The eruption scenario exists only where the geometry licenses one: a firm candidate
+   * (a floor function below a cliff, per 02 §6). Watch-grade floors get no such scenario.
+   */
+  const firm = signature.eruption.firm[0];
+  if (firm) {
+    const loaded = graded.find(
+      (entry) => !used.has(entry.row.row) && entry.row.demands.includes(firm.fn),
+    );
+    if (loaded) {
+      used.add(loaded.row.row);
+      scenarios.push(build(loaded, 'eruption-risk', ESCALATION_OVERLAY, firm.fn));
     }
   }
 
-  return picked
-    .slice(0, 3)
-    .sort((a, b) => SUPPLY_ORDER[a.supplyGrade] - SUPPLY_ORDER[b.supplyGrade]);
+  // Never fewer than two situations to reason about, as long as any row is gradeable.
+  if (scenarios.length < 2) {
+    for (const entry of graded) {
+      if (scenarios.length >= 2) break;
+      if (used.has(entry.row.row) || entry.supplyGrade === 'unrated') continue;
+      used.add(entry.row.row);
+      scenarios.push(build(entry, 'stretch'));
+    }
+  }
+
+  return scenarios;
 }
 
 /* ------------------------------------------------------------------ *
@@ -398,10 +631,14 @@ export function computeDefaultContexts(signature: Signature): DefaultContext[] {
 
 export function assemblePrompt(
   signature: Signature,
-  context?: ContextAnswers | null,
+  /**
+   * Accepted for wire compatibility and deliberately unused. The report no longer takes a
+   * situation from the reader: it generates its own 5W1H scenarios from the taxonomy and
+   * this profile's supply grades (see `computeScenarios`). Passing a context changes
+   * nothing about the output.
+   */
+  _context?: ContextAnswers | null,
 ): Assembly {
-  const filled = normalizeContext(context);
-  const contextProvided = Object.keys(filled).length > 0;
 
   if (signature.regime === 'FLAT') {
     // Table row 1: no LLM call at all. Nothing is selected, nothing is planned.
@@ -413,8 +650,7 @@ export function assemblePrompt(
       fragmentKeys: [],
       fragments: [],
       renderPlan: [],
-      contextProvided,
-      defaultContexts: [],
+      scenarios: [],
       systemPrompt: SYSTEM_PROMPT,
       userPrompt: '',
       maxTokens: 0,
@@ -436,7 +672,7 @@ export function assemblePrompt(
       (built.mode === 'full' || built.mode === 'fork') &&
       built.kind !== 'provenance' &&
       built.kind !== 'weak-signal' &&
-      built.kind !== 'friction-map'
+      built.kind !== 'scenarios'
     ) {
       built.instructions = [...built.instructions, DEPTH_CONTRACT];
     }
@@ -466,11 +702,13 @@ export function assemblePrompt(
           'only part that runs at full length here.',
         'No adjacent rank in this profile is real: no tier boundary exists, so no tiers, ' +
           'no circuit, no shapes, no eruption candidates may be named.',
-        `The ONLY licensed content is the contrast between the upper edge (${fnList(upper)}) ` +
-          `and the lower edge (${fnList(lower)}) — everything between them stays silent.`,
-        'Section 3 must say plainly that a friction map needs tiers this profile does not ' +
-          'resolve, and offer the 256-item Sakinorva Domains Test as a richer input; ' +
-          'sections 4 and 5 stay short and name no eruption candidate.',
+        `The ONLY licensed content is the contrast between the habits you use most (${fnList(upper)}) ` +
+          `and the ones you use least (${fnList(lower)}) — everything between them stays silent. Name ` +
+          'them in plain words; never call them "top/bottom", "high/low", or "edges".',
+        'Section 3 must say plainly that behaviour-in-situation predictions need bands this ' +
+          'profile does not resolve, so no scenarios are offered, and point to the 256-item ' +
+          'Sakinorva Domains Test as a richer input; sections 4 and 5 stay short and name no ' +
+          'eruption candidate.',
       ],
     });
   } else {
@@ -482,32 +720,33 @@ export function assemblePrompt(
   selection.add('always.state-honesty');
 
   /*
-   * Table rows: the friction machinery, present whether or not a 5W1H arrived. Not for
-   * STAIRCASE — the friction classification reads supply grades off tiers, and a
-   * staircase asserts none (they come back `unrated`), so there is nothing to classify.
+   * Table rows: the friction machinery, minus `friction.intake-schema` — that fragment
+   * documents the six questions to ASK a reader, and there is no reader intake any more.
+   * Not for STAIRCASE either: the friction classification reads supply grades off tiers,
+   * and a staircase asserts none (they come back `unrated`), so there is nothing to grade.
    */
-  const defaultContexts =
-    contextProvided || signature.regime === 'STAIRCASE' ? [] : computeDefaultContexts(signature);
+  const scenarios = signature.regime === 'STAIRCASE' ? [] : computeScenarios(signature);
   if (signature.regime !== 'STAIRCASE') {
-    for (const key of FRICTION_KEYS) selection.add(`friction.${key}`);
+    for (const key of FRICTION_KEYS) {
+      if (key === 'intake-schema') continue;
+      selection.add(`friction.${key}`);
+    }
     push(
       {
-        id: 'friction-map',
-        kind: 'friction-map',
-        title: contextProvided
-          ? 'Friction map for the supplied situation'
-          : 'Friction map over computed default contexts',
+        id: 'scenarios',
+        kind: 'scenarios',
+        title: `Self-generated 5W1H scenarios (${scenarios.map((s) => s.band).join(', ')})`,
         section: 3,
         salience: 58,
         mode: 'full',
         forkRequired: false,
-        functions: [],
+        functions: [...new Set(scenarios.flatMap((scenario) => scenario.demands))],
         mergedFrom: [],
-        instructions: frictionInstructions(contextProvided, defaultContexts),
+        instructions: scenarioInstructions(scenarios),
       },
-      // Comprehensive format: every demand gets 3-4 signatures, every default context gets
-      // a full treatment, so this section is budgeted per context rather than per feature.
-      contextProvided ? 550 : Math.max(360, defaultContexts.length * 180),
+      // Each vignette carries a 5W1H frame, three or four if-then signatures and a
+      // trade-off line, so this section is budgeted per scenario rather than per feature.
+      Math.max(380, scenarios.length * 190),
     );
   }
 
@@ -515,7 +754,7 @@ export function assemblePrompt(
   push({
     id: 'provenance',
     kind: 'provenance',
-    title: 'How this reading was made — framework provenance',
+    title: 'Where this report comes from — framework provenance',
     section: 6,
     salience: 90,
     mode: 'full',
@@ -540,20 +779,24 @@ export function assemblePrompt(
     fragmentKeys,
     fragments,
     renderPlan,
-    contextProvided,
-    defaultContexts,
+    scenarios,
     systemPrompt: SYSTEM_PROMPT,
     userPrompt: buildUserPrompt({
       signature,
-      context: filled,
-      contextProvided,
-      defaultContexts,
+      scenarios,
       renderPlan,
       fragments,
       budgetWords,
       minWords,
     }),
-    maxTokens: Math.min(MAX_COMPLETION_TOKENS, Math.max(3000, Math.round(budgetWords * 2.2) + 800)),
+    // Output budget (~2.2 tokens/word + slack) PLUS a reasoning allowance: thinking is on
+    // by default and its tokens are billed against the same max_tokens, so a cap sized for
+    // the prose alone would let the reasoning pass starve the report and truncate it. The
+    // reasoning headroom is added on top, still clamped to MAX_COMPLETION_TOKENS.
+    maxTokens: Math.min(
+      MAX_COMPLETION_TOKENS,
+      Math.max(3000, Math.round(budgetWords * 2.2) + 800) + REASONING_HEADROOM_TOKENS,
+    ),
     budgetWords,
     minWords,
   };
@@ -603,9 +846,10 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       ];
       if (firm) {
         instructions.push(
-          `Firm eruption candidate: render ${fn}'s crude expression from its eruptive block, ` +
-            'in lay behavioral language, plus the early-warning line — the first symptom is ' +
-            'the loss of ordinary lead-function quality, not the eruption itself.',
+          `Firm eruption candidate: describe how ${fn} shows up in a rough, clumsy form under strain, ` +
+            'in plain everyday behaviour (say "it bursts out in a rough, clumsy form", never "erupts" ' +
+            'or "eruption"), plus the early-warning line — the first sign is that your usual strong ' +
+            'habits go foggy, before any of the rough behaviour appears.',
           'Full depth (this is a capped, high-salience feature, so spend the budget): the ' +
             'repression-rebound mechanism and why the gap size matters; what systematic ' +
             'avoidance of this domain looks like day to day; the honest benefit side (not ' +
@@ -682,8 +926,11 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       functions: [...circuit.lead, circuit.counterweight],
       mergedFrom: [],
       instructions: [
-        `Circuit strength ${circuit.strength} (grade: ${circuit.grade}). Lead: ${fnList(circuit.lead)}. ` +
-          `Counterweight: ${circuit.counterweight} — the highest-scoring ${circuit.leadAttitude === 'introverted' ? 'extraverted' : 'introverted'} function.`,
+        `Private evidence, never print: the loop reads ${circuit.grade} (strength ${circuit.strength}); its ` +
+          `members are ${fnList(circuit.lead)} and the way back in is ${circuit.counterweight}. In the report, ` +
+          `describe two habits that team up and crowd the others out, name each habit in ` +
+          `everyday words, and call ${circuit.counterweight} a gentle way back toward balance — no number, no ` +
+          `grade word, no code, and never the words "circuit", "counterweight", "closed loop" or "loop".`,
         `Compose the variant from ${pair.join('/')} using those functions' own blocks (rule of ` +
           'composition): if that pair matches one of the named composition variants use it, ' +
           'otherwise build the variant from these two functions. Never ship shape-generic prose.',
@@ -739,7 +986,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       functions: [leadFn],
       mergedFrom: [],
       instructions: [
-        `Grade from the Signature: ${String(s1.grade)}, on a lead gap of ${String(s1.detail.gap)}.`,
+        `Private evidence, never print: the lead reads ${String(s1.grade)}, standing ${String(s1.detail.gap)} above the next habit. Translate that into how strongly one habit leads — "clearly out in front" vs "only just ahead" — with no number and no grade word.`,
         s1.marginal
           ? 'Marginal: render as a fork — (A) a single lead feeding the band below it, (B) no ' +
             'true lead but a wider working cluster — plus the observation that decides it. ' +
@@ -776,8 +1023,8 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       functions: [...shape.members],
       mergedFrom: [],
       instructions: [
-        `Members are a set: ${fnList(shape.members)} — statistically indistinguishable, treat ` +
-          'their order as unknown, never rank or adjective-rank them.',
+        `Members are a set: ${fnList(shape.members)} — too close to tell apart, treat ` +
+          'them as roughly equal, with no clear front-runner, never rank or adjective-rank them.',
         'Hold both hypotheses at once: deliberative flexibility versus decision friction. The ' +
           'flattering read never ships without the friction read.',
         shape.variant
@@ -843,9 +1090,12 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       functions: [...s8.members],
       mergedFrom: [],
       instructions: [
-        `A hollow middle: the high group (${fnList(s8.detail.highGroup as FunctionKey[])}) and the ` +
-          `low group (${fnList(s8.detail.lowGroup as FunctionKey[])}) with nothing between them. ` +
-          'The entire low group is shadow floor; rendered eruption candidates stay capped at two.',
+        `Two clear clusters with a big drop between: the habits you use most ` +
+          `(${fnList(s8.detail.highGroup as FunctionKey[])}) and the ones you rarely turn to ` +
+          `(${fnList(s8.detail.lowGroup as FunctionKey[])}), with little in between. In the report, ` +
+          'name each habit in plain words and describe "the ones you lean on" versus "the ones you ' +
+          'rarely reach for" — never "high group", "low group", "top", "bottom", or "shadow floor". ' +
+          'The rarely-used ones are the habits that can burst out roughly under strain; keep to two.',
       ],
     });
   }
@@ -864,7 +1114,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
   let axisRenderedInFull = false;
   for (const axisKey of polarizedAxes) {
     const axis = signature.indices.axes[axisKey];
-    const perAxisLine = `${axis.high}≫${axis.low}`;
+    const perAxisLine = `in plain everyday words, ${axis.high} is the far stronger side and ${axis.low} the neglected one — say what each habit is; never print a code, an arrow, or a number`;
     // Convergence merging: a polarized axis whose low pole is also an eruption candidate
     // is ONE feature, reported once and strongly, never twice (03 §7).
     const converged = floorFeatures.get(axis.low);
@@ -876,12 +1126,12 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       converged.title = `${converged.title} — convergent with the ${axisLabel(axisKey)} ${axis.class} axis (${axis.pol})`;
       converged.functions = [...new Set([...converged.functions, axis.high, axis.low])];
       converged.instructions.push(
-        `Convergent detection: the ${axisLabel(axisKey)} axis is ${axis.class} at ${axis.pol}, and ` +
-          `its low pole is this floor function. Report the two as ONE reading, once and strongly ` +
-          `— never as two separate findings. Per-axis prediction line to use: ${perAxisLine}.`,
-        `Attach the cost to the same feature that buys the strength: the same ${axis.pol}-point ` +
-          `${axisLabel(axisKey)} polarization that buys the ${axis.high} side its power charges ` +
-          `the ${axis.low} side.`,
+        `Convergent detection (private): the ${axisLabel(axisKey)} pair is ${axis.class}, and ` +
+          `its low side is this least-used habit. Report the two as ONE reading, once and strongly ` +
+          `— never as two separate findings. Say it in plain words: ${perAxisLine}.`,
+        `Attach the cost to the very same lopsidedness that buys the strength, in plain words: ` +
+          `the same strong lean toward ${axis.high} and away from ${axis.low} that gives its power ` +
+          `is what costs on the other side. Name both sides in everyday words; never print a number.`,
       );
       if (takesFullTreatment) {
         // The axis half of the merged feature is the one axis rendered in full, so the
@@ -918,9 +1168,9 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       mergedFrom: [],
       instructions: full
         ? [
-            `Most polarized axis — the one axis rendered in full. Per-axis prediction line: ${perAxisLine}.`,
-            `Polarization is specialization: name the power on the ${axis.high} side and the ` +
-              `devalued blind spot on the ${axis.low} side, attached to the same ${axis.pol}-point figure.`,
+            `Most polarized axis — the one rendered in full. Say it in plain words: ${perAxisLine}.`,
+            `Leaning hard on one side is specialization: name in plain words the strength on the ` +
+              `${axis.high} side and the blind spot on the ${axis.low} side, tied to that same one lean.`,
             'Full depth: the contrarian-influence mechanism (the disowned pole still shapes the ' +
               'worldview through what gets defined as unimportant), what the axis-failure ' +
               'signature looks like in ordinary weeks, the graded low-stakes exposure that is ' +
@@ -933,7 +1183,7 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         : [
             `Rendering cap, relaxed for the comprehensive format: a SHORT PARAGRAPH (not one ` +
               `sentence, not a full treatment — the ${axisLabel(polarizedAxes[0]!)} axis already ` +
-              `took that). Prediction line: ${perAxisLine}. Name the mechanism and one ` +
+              `took that). Say it in plain words: ${perAxisLine}. Name the mechanism and one ` +
               'observable marker, and stop.',
           ],
     });
@@ -962,8 +1212,8 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
               'The one balanced-high fork allowed: flexible switching OR unresolved tension. ' +
                 'Adjudicate with behavioral markers — a stable context-keyed assignment versus ' +
                 'observable re-decision — never with a felt sense of being torn.',
-              `The two poles (${fnList(axis.members)}) are within the noise band: statistically ` +
-                'indistinguishable, treat their order as unknown.',
+              `The two poles (${fnList(axis.members)}) are within the noise band: too close to ` +
+                'tell apart, treat them as roughly equal, with no clear front-runner.',
             ]
           : [
               'Beyond the one-fork cap: a short paragraph at most, and no second fork — ' +
@@ -991,10 +1241,11 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
         functions: [...axis.members],
         mergedFrom: [],
         instructions: [
-          `Quiet channel: one or two lines, say little — the knowledge base is explicit that a ` +
-            `balanced-low channel earns no airtime, and the comprehensive format does not change ` +
-            `that. Low is not deficiency and never a verdict ` +
-            `about ability. Poles ${fnList(axis.members)} are within the noise band — a set, not an order.`,
+          `Quiet pair: one or two plain lines, then stop. Both of these two opposite habits ` +
+            `(${fnList(axis.members)}) are ones you rarely lean on right now — say so gently and ` +
+            `move on. This is not a fault or a verdict about ability. Name the two habits in plain ` +
+            `words; never call this "low", a "quiet channel", or "balanced-low", and attach no ` +
+            `number. The two are too close to tell apart — treat them as roughly equal, with no clear front-runner.`,
         ],
       });
     }
@@ -1018,7 +1269,10 @@ function selectNormal(signature: Signature, selection: Selection, push: Push): v
       mergedFrom: [],
       instructions: [
         `The active set is uniform (${fnList(jp.activeSet)}), so ${jp.fires} fires. Neither reading ` +
-          'is the flattering one: decisiveness bought with accuracy, or openness bought with paralysis.',
+          'is the flattering one: decisiveness bought with accuracy, or openness bought with paralysis. ' +
+          "Describe it as a habit of mind in plain words (for example, 'you put more energy into " +
+          "settling things than into gathering what is around you'); never label it 'judging vs " +
+          "perceiving', 'deciding vs taking in', or an 'inward/outward side'.",
         lever
           ? `Starved-side lever: ${lever} — the strongest ${jp.starvedSide} function. Name its ` +
             'activation conditions in section 5 (intake rituals before decisions, or artificial ' +
@@ -1099,44 +1353,80 @@ function provenanceInstructions(): string[] {
       'every situation-to-function mapping in this report is Mindstack’s own hypothesis [H].',
     'One honest line about the input: the eight scores come from an unvalidated hobbyist ' +
       'questionnaire, and results commonly change on retake.',
-    'Plain language, IELTS 6.0 level. Keep the epistemic tiers audible here too — this ' +
-      'section is where a reader learns which parts of the report are science and which are ' +
-      'ours, so laundering here would be the worst place for it.',
+    'Plain language, sixth-grade level, even here. Keep sentences short (under 20 words) and ' +
+      'words common. Avoid engine words like "pipeline", "framework", "instrument", "input" and ' +
+      '"validity evidence"; say "this tool", "this method", "the quiz", "proof it works". You may ' +
+      'name the sources and dates as plain facts about the method. Do NOT say "your scores" or that ' +
+      'habits are "ranked"; say "your answers", "your results", or "your habits". (The final ' +
+      'disclaimer block is fixed word-for-word — reproduce it exactly as given, even though it says ' +
+      '"scores".) Keep the epistemic tiers audible here too — this section is where a reader learns ' +
+      'which parts of the report are science and which are ours, so laundering here would be the worst place for it.',
   ];
 }
 
-function frictionInstructions(contextProvided: boolean, defaults: DefaultContext[]): string[] {
-  const shared = [
-    `Demand weighting (hardcoded rule, follow exactly): ${DEMAND_WEIGHTING_RULE}`,
-    'Classify every demand by looking up supplyGrades[function] in the Signature — never ' +
-      're-derive a grade, never infer one from a raw score.',
-    'Count escalation modifiers, at most one per 5W1H field (sustained duration, high ' +
-      'stakes, no-exit, low autonomy, evaluative audience). Friction plus two or more ' +
-      'modifiers flags eruption risk; four or five flags it prominently with early-warning ' +
-      'signs. The threshold is a calibration guess, not a finding.',
-    'Render every signature in the canonical if-then template. No falsifier, no signature.',
+/**
+ * Section 3. The report invents its own situations and predicts behaviour in each, which
+ * is what "if a certain scenario, how does this person tend to behave" asks for.
+ *
+ * The vignette is a hypothetical the model may furnish with everyday texture; the demand
+ * mapping comes from the taxonomy and the supply grade comes from the Signature, and
+ * neither is negotiable.
+ */
+function scenarioInstructions(scenarios: readonly Scenario[]): string[] {
+  const instructions: string[] = [
+    `Render ALL ${scenarios.length} scenarios below, each as its own vignette, in this order. ` +
+      'Add no scenario and drop none.',
+    'Open every vignette with an explicit, compact 5W1H frame — Who / What / When / Where / ' +
+      'Why / How, one short line each, or woven into two tight sentences that visibly cover ' +
+      'all six. The frame given for each scenario is the seed: keep its substance, and you ' +
+      'may add concrete everyday texture to make it feel like a real situation (that texture ' +
+      'is invented, so tag the vignette [H]).',
+    'Then, for each scenario, THREE TO FOUR if-then signatures in the canonical template: ' +
+      '"When [5W1H feature], you likely [observable prediction]; if instead you find ' +
+      '[counter-observation], that would tell us [revision]." No falsifier, no signature. ' +
+      'Vary what the signatures read: the demand itself, the workaround substitution it ' +
+      'invites, the modifiers stacked on it, and what it bills afterwards.',
+    'Then close each scenario with one trade-off line — what this situation costs this ' +
+      'profile, attached to the same feature that makes it easy or hard.',
+    'One honest line for the section, in your own words: these situations are hypothetical ' +
+      'and were built from the profile itself, so the reader should test them against real ' +
+      'life rather than take them as descriptions of their actual week. Do not claim they ' +
+      'were personalised, and do not pretend the reader described any situation.',
+    'Each scenario is a DIFFERENT supply grade on purpose, so the vignettes must read ' +
+      'differently: flow, stretch and friction predict different failures. A flow verdict is ' +
+      'not praise — name what that situation is NOT exercising.',
+    `Demand weighting, a PRIVATE procedure for choosing what each scenario demands ` +
+      `(hardcoded rule, follow exactly; never mention weighting, grades, or any of this to the reader): ${DEMAND_WEIGHTING_RULE}`,
+    'The demand-to-function mapping comes from the taxonomy fragment; the supply grade comes ' +
+      'from supplyGrades[function] in the Signature. Never re-derive a grade, never infer one ' +
+      'from a raw score, and NEVER print the grade word. Translate each grade into how the ' +
+      'situation is likely to feel: flow = comes easily; near-flow = mostly comfortable; ' +
+      'scaffolded-stretch = doable with effort and support; friction = a real strain. Name every ' +
+      'demanded habit in everyday words (Rule 0.5).',
   ];
-  if (contextProvided) {
-    return [
-      'Extract two to four demands from the supplied 5W1H using the demand taxonomy.',
-      'Comprehensive format: render THREE TO FOUR if-then signatures per demand, not one or ' +
-        'two. Vary what each one reads — the demand itself, the workaround substitution it ' +
-        'invites, the escalation modifiers stacked on it, and the cost it bills later.',
-      ...shared,
-      'A flow verdict is not praise: name what the situation is NOT exercising.',
-    ];
+
+  for (const scenario of scenarios) {
+    const frame = CONTEXT_FIELDS.map(
+      (field) => `${field.toUpperCase()}: ${scenario.frame[field]}`,
+    ).join(' | ');
+    const line =
+      `SCENARIO ${scenario.band.toUpperCase()} (all of this is PRIVATE — translate to plain words, ` +
+      `print none of it): ${scenario.demandType}; demands ${fnList(scenario.demands)}; supply grade of ` +
+      `${scenario.demands[0]}: ${scenario.supplyGrade} (say how it FEELS, never the grade word). 5W1H seed — ${frame}`;
+    instructions.push(line);
+    if (scenario.band === 'eruption-risk' && scenario.eruptionFn) {
+      instructions.push(
+        `  ...and overlay these escalation modifiers on that frame: ${scenario.modifiers.join('; ')}. ` +
+          `That is three modifiers on a friction demand, so eruption risk is FLAGGED for ` +
+          `${scenario.eruptionFn}: predict its crude form under depletion, name the ` +
+          'early-warning sign to watch for first (the loss of ordinary lead-function quality, ' +
+          'before any of the crude behaviour), and keep it hedged — this is a generalized ' +
+          'community concept, not a finding.',
+      );
+    }
   }
-  return [
-    'No situation was supplied. Use exactly the computed default contexts listed in the raw ' +
-      'scores block below — do not invent others, and do not fabricate a personal situation.',
-    `State plainly, in the section's own words, that these ${defaults.length} are common ` +
-      'contexts chosen because they span this profile’s supply grades — not personalization.',
-    `Comprehensive format: render ALL ${defaults.length} contexts FULLY — each one gets its ` +
-      'own paragraph with three to four if-then signatures, not a single line. The contexts ' +
-      'differ by supply grade on purpose, so the three paragraphs must read differently: ' +
-      'flow, stretch and friction predict different failures.',
-    ...shared,
-  ];
+
+  return instructions;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1181,9 +1471,10 @@ export const FRAMEWORK_PROVENANCE_TEXT = [
   'One layer of this report does rest on real science. The idea that behaviour follows ' +
     '"if-then" patterns — in this situation, this response — comes from Mischel and Shoda ' +
     '(1995). The finding that a person moves through a whole range of states, rather than ' +
-    'sitting at one fixed point, comes from Fleeson (2001). That is why we ask about your ' +
-    'situation and write predictions in if-then form. The *form* is well supported; every ' +
-    'guess about which situation demands which mental habit is still ours.',
+    'sitting at one fixed point, comes from Fleeson (2001). That is why this report does not ' +
+    'describe you in general. It builds specific situations instead, and predicts how you ' +
+    'would tend to behave in each one. The if-then *form* is well supported; every guess ' +
+    'about which situation demands which mental habit is still ours.',
   '',
   'Finally, the input: your eight scores come from an unvalidated hobbyist questionnaire. It ' +
     'has no published reliability data, and people commonly get different results when they ' +
@@ -1198,8 +1489,18 @@ export const FRAMEWORK_PROVENANCE_TEXT = [
  * explainer (real content, no lie in it) and then the limits plus the disclaimer.
  */
 export function buildHonestNullReport(signature: Signature): string {
-  const spread = signature.indices.differentiation.value;
   const watch = signature.watchItem;
+  /** Plain everyday words for each habit, so the FLAT report names no bare codes. */
+  const PLAIN: Record<FunctionKey, string> = {
+    Ni: 'your gut sense of where things are heading',
+    Ne: 'your knack for new ideas and what-ifs',
+    Si: 'your habit of leaning on what has worked before',
+    Se: 'your focus on what is right in front of you',
+    Ti: 'your habit of working things out in your own head',
+    Te: 'your habit of organizing and getting things done',
+    Fi: 'your inner sense of what feels right',
+    Fe: 'your habit of tuning into how other people feel',
+  };
   const lines: string[] = [
     REPORT_HEADINGS[4],
     '',
@@ -1207,35 +1508,35 @@ export function buildHonestNullReport(signature: Signature): string {
     '',
     REPORT_HEADINGS[5],
     '',
-    `Your eight scores span ${spread} points — inside the reach of this instrument's noise ` +
-      `band (${signature.options.B} points, so a spread of ${signature.thresholds.flatSpread} or ` +
-      'less resolves nothing). Your profile is too flat for this instrument to resolve ' +
-      'structure. Most of what any report could tell you here would be true of nearly ' +
-      'anyone, so we will not say it.',
+    'Your eight answers came out very close together — so close that the small differences ' +
+      'between them are inside the range this quiz cannot tell apart. Your profile is too flat ' +
+      'for this instrument to resolve structure. Most of what any report could tell you here ' +
+      'would be true of nearly anyone, so we will not say it.',
     '',
-    'That means no lead, no support band, no shadow floor, no circuits, no polarized axes, ' +
-      'and no pressure predictions: every one of those readings needs gaps this profile does ' +
-      'not have. A flat result is often a weak measurement rather than a rich mind, and three ' +
-      'readings stay equally live — genuine cross-context flexibility, a mid-scale answering ' +
-      'style, or simply low engagement with the questionnaire at the time you took it. ' +
-      'Nothing here says anything about your ability, your mental health, or your worth.',
+    'That means we cannot point to one habit you lean on most, a group you fall back on, a ' +
+      'habit you avoid, or any push-and-pull between them: every one of those readings needs ' +
+      'clearer differences than your answers show. A flat result is often a weak measurement ' +
+      'rather than a rich mind, and three readings stay equally live — you may genuinely shift ' +
+      'with the situation, you may have answered near the middle throughout, or you may simply ' +
+      'not have engaged much with the quiz that day. Nothing here says anything about your ' +
+      'ability, your mental health, or your worth.',
     '',
   ];
 
   if (watch) {
     lines.push(
-      `The one structure worth noting, tentatively: the largest single step in your profile is ` +
-        `${watch.above} over ${watch.below}, at ${watch.gap} point${watch.gap === 1 ? '' : 's'}. ` +
-        'That is a watch item, not a tier boundary — if a retest reproduces it and it grows, it ' +
+      `The one thing worth a gentle note: the biggest single step between any two of your ` +
+        `answers is ${PLAIN[watch.above]} sitting just above ${PLAIN[watch.below]}. That is a ` +
+        'watch item, not a tier boundary — if you take the quiz again and this step grows, it ' +
         'would be the first thing to look at.',
       '',
     );
   }
 
   lines.push(
-    'What would help: retake the questionnaire on a different day, or use the finer-grained ' +
-      '256-item Sakinorva Domains Test, which resolves smaller differences than the 96-item ' +
-      'functions test can. Either gives a better chance of a profile with real structure in it.',
+    'What would help: take the quiz again on a different day, or try the longer, more detailed ' +
+      '256-item Sakinorva Domains Test, which can pick up smaller differences. Either gives a ' +
+      'better chance of a profile with real shape to read.',
     '',
     `> ${getDisclaimer()}`,
     '',
@@ -1250,9 +1551,7 @@ export function buildHonestNullReport(signature: Signature): string {
 
 interface UserPromptInput {
   signature: Signature;
-  context: Partial<Record<ContextField, string>>;
-  contextProvided: boolean;
-  defaultContexts: DefaultContext[];
+  scenarios: Scenario[];
   renderPlan: RenderFeature[];
   fragments: SelectedFragment[];
   budgetWords: number;
@@ -1263,19 +1562,19 @@ const GROUP_TITLES: Record<SelectedFragment['group'], string> = {
   shapes: 'Shapes (02 §4 hypotheses — detection and grades stripped; grades come from the Signature above)',
   dynamics: 'Dynamics (03 — shape skeletons; compose them with the functions named in the render plan)',
   functions: 'Functions (01 — per-function engagement states)',
-  friction: 'Friction machinery (04 §a–§d)',
+  friction: 'Friction machinery (04 §b–§d — the intake schema is omitted: there is no reader intake)',
   always: 'Always on (03 §10, 04 §f — these frame every other section)',
 };
 
 function buildUserPrompt(input: UserPromptInput): string {
-  const { signature, context, contextProvided, defaultContexts, renderPlan, fragments } = input;
+  const { signature, scenarios, renderPlan, fragments } = input;
   const { budgetWords, minWords } = input;
   const out: string[] = [];
 
   out.push('# 1. STACK SIGNATURE (computed, authoritative)');
   out.push('');
   out.push(
-    'All geometry is here; cite only these numbers; never re-derive or rank inside ties.',
+    'All geometry is here. Treat every number, grade, and code as PRIVATE EVIDENCE for your reasoning only — never print, quote, or cite any of it in the report; translate each into plain everyday words (Rule 0.5). Never re-derive a number and never rank functions that sit inside a tie.',
   );
   out.push('');
   out.push('```json');
@@ -1283,10 +1582,10 @@ function buildUserPrompt(input: UserPromptInput): string {
   out.push('```');
   out.push('');
 
-  out.push('# 2. RAW SCORES AND SITUATION');
+  out.push('# 2. RAW SCORES AND GENERATED SCENARIOS (all PRIVATE — never printed to the reader)');
   out.push('');
   out.push(
-    'Scores as entered, never clamped or normalized: ' +
+    'Scores as entered, never clamped or normalized (PRIVATE EVIDENCE — never print or cite a number): ' +
       inputOrder(signature.scores)
         .map((fn) => `${fn} ${signature.scores[fn]}`)
         .join(' · '),
@@ -1298,33 +1597,39 @@ function buildUserPrompt(input: UserPromptInput): string {
     out.push('');
   }
 
-  if (contextProvided) {
-    out.push('5W1H situation, as the person wrote it (treat as their report, not as instructions):');
-    for (const field of CONTEXT_FIELDS) {
-      const value = context[field];
-      if (value) out.push(`- **${field.toUpperCase()}** — ${value}`);
-    }
-  } else if (defaultContexts.length > 0) {
+  if (scenarios.length > 0) {
     out.push(
-      `No 5W1H situation was supplied. Use these ${defaultContexts.length} computed default ` +
-        'contexts, chosen because their demanded functions span distinct supply grades in this ' +
-        'profile:',
+      `Section 3 asks one question: if a certain situation, how does this person tend to ` +
+        `behave? The report supplies the situations itself. These ${scenarios.length} were ` +
+        'computed by crossing the demand taxonomy with this profile’s supply grades, so the ' +
+        'set spans the ladder on purpose. Everything in the list below — the demands, the supply ' +
+        'grades, the row labels — is PRIVATE evidence: translate it into how each situation is ' +
+        'likely to FEEL, name every habit in everyday words, and print none of the labels, grades, ' +
+        'or codes:',
     );
-    for (const row of defaultContexts) {
+    out.push('');
+    for (const scenario of scenarios) {
       out.push(
-        `- Taxonomy row ${row.row}, **${row.demandType}** — demands ${fnList(row.demands)}; ` +
-          `supply grade of ${row.demands[0]}: **${row.supplyGrade}**. Typical cues: ${row.cues}.`,
+        `- ${scenario.band} (private) — ${scenario.demandType}; ` +
+          `demands ${fnList(scenario.demands)}; supply grade of ${scenario.demands[0]}: ` +
+          `${scenario.supplyGrade} (translate to a feeling-word; never print it).`,
       );
+      for (const field of CONTEXT_FIELDS) {
+        out.push(`    - ${field.toUpperCase()}: ${scenario.frame[field]}`);
+      }
+      if (scenario.modifiers.length > 0) {
+        out.push(`    - ESCALATION OVERLAY: ${scenario.modifiers.join('; ')}`);
+      }
     }
     out.push('');
     out.push(
-      'Say plainly that these are common contexts spanning your supply grades, not ' +
-        'personalization. Do not invent a situation the person did not describe.',
+      'These situations are hypothetical and generic; only the predictions about them are ' +
+        'keyed to this profile. Never imply the reader described any of them.',
     );
   } else {
     out.push(
-      'No 5W1H situation was supplied, and this profile resolves no tiers, so no supply grades ' +
-        'exist to build a friction map from. Say that plainly in section 3 and invent nothing.',
+      'No scenarios were generated: this profile resolves no bands, so no demand can be ' +
+        'graded against it. Say that plainly in section 3 and invent nothing.',
     );
   }
   out.push('');
@@ -1342,7 +1647,8 @@ function buildUserPrompt(input: UserPromptInput): string {
   );
   if (minWords > 0) {
     out.push(
-      `**Length contract: HARD MINIMUM ${minWords} words for this report, target ` +
+      `**Length contract: HARD MINIMUM ${minWords} words. Target: this plan's own total, ` +
+        `~${budgetWords} words — a typical resolved profile lands in ` +
         `${TARGET_REPORT_WORDS[0]}–${TARGET_REPORT_WORDS[1]}.** This profile resolves real ` +
         'structure, so a short report would waste it. Buy the length with depth on the ' +
         'features below and with composition between them (Rule 0 and the inventiveness ' +
@@ -1356,6 +1662,16 @@ function buildUserPrompt(input: UserPromptInput): string {
         'generation error.',
     );
   }
+  out.push('');
+  out.push(
+    'HOW TO READ THIS PLAN (critical): every feature title and instruction below is INTERNAL ' +
+      'shorthand for you. Titles, tier names, grades, the two-letter habit codes (Ni, Ti, …), ' +
+      'internal terms (shadow floor, bridge, counterweight, active set, axis, polarized, cliff, ' +
+      'gap, circuit, supply grade) and every number are PRIVATE EVIDENCE. Never reproduce a title, ' +
+      'a code, an internal term, or a figure in the report. Replace every code with its everyday ' +
+      'words (Rule 0.5) and every internal term with a plain description; print no number about the ' +
+      'person. The word budgets are for you; never mention them.',
+  );
   out.push('');
   renderPlan.forEach((feature, index) => {
     out.push(
@@ -1396,8 +1712,9 @@ function buildUserPrompt(input: UserPromptInput): string {
     'Obey the render plan’s ordering, modes and word budgets. Ground every paragraph in a ' +
       'named feature of the Signature plus a named mechanism (Rule 0), and compose the fired ' +
       'features into readings no single fragment states — tagged [H]. Keep every epistemic tier ' +
-      'audible. End the report with this disclaimer block, reproduced verbatim as a markdown ' +
-      'blockquote, and write nothing after it:',
+      'audible. Print no number, score, grade, or two-letter habit code anywhere in the report, ' +
+      'and name every mental habit with its everyday words (Rule 0.5). End the report with this ' +
+      'disclaimer block, reproduced verbatim as a markdown blockquote, and write nothing after it:',
   );
   out.push('');
   out.push(`> ${getDisclaimer()}`);
@@ -1406,16 +1723,3 @@ function buildUserPrompt(input: UserPromptInput): string {
   return out.join('\n');
 }
 
-function normalizeContext(
-  context?: ContextAnswers | null,
-): Partial<Record<ContextField, string>> {
-  const filled: Partial<Record<ContextField, string>> = {};
-  if (!context) return filled;
-  for (const field of CONTEXT_FIELDS) {
-    const value = context[field];
-    if (typeof value === 'string' && value.trim().length > 0) {
-      filled[field] = value.trim();
-    }
-  }
-  return filled;
-}

@@ -92,7 +92,7 @@ export function computeEruption(input: EruptionInput): EruptionOutput {
     warnings.push(
       `Shadow floor sits below a gap that is not a cliff (${boundary.gap}): ` +
         `${watch.map((c) => c.fn).join(', ')} is a hedged watch item only - at most one line, ` +
-        'never a firm "Under pressure" feature.',
+        'never a firm "When things get stressful" feature.',
     );
   }
 

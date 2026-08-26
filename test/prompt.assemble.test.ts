@@ -12,7 +12,7 @@ import { computeSignature } from '../src/shared/geometry';
 import type { FunctionKey, Signature } from '../src/shared/geometry';
 import {
   assemblePrompt,
-  computeDefaultContexts,
+  computeScenarios,
   DEMAND_WEIGHTING_RULE,
   FRAMEWORK_PROVENANCE_TEXT,
   MIN_REPORT_WORDS,
@@ -214,7 +214,9 @@ describe('profile A render plan (05 §5.1 salience and caps)', () => {
       if (f.mode === 'brief') expect(f.budgetWords).toBe(60);
       if (f.mode === 'full' || f.mode === 'fork') {
         expect(f.budgetWords).toBeGreaterThanOrEqual(300);
-        expect(f.budgetWords).toBeLessThanOrEqual(600);
+        // Section 3 is budgeted per scenario, so it is legitimately the longest slot.
+        const ceiling = f.kind === 'scenarios' ? 4 * 190 : 600;
+        expect(f.budgetWords).toBeLessThanOrEqual(ceiling);
       }
     }
   });
@@ -222,7 +224,7 @@ describe('profile A render plan (05 §5.1 salience and caps)', () => {
   it('attaches the depth contract to every full-length profile feature', () => {
     for (const f of assemblyA.renderPlan) {
       if (f.mode !== 'full' && f.mode !== 'fork') continue;
-      if (f.kind === 'provenance' || f.kind === 'friction-map') continue;
+      if (f.kind === 'provenance' || f.kind === 'scenarios') continue;
       const text = f.instructions.join(' ');
       expect(text, `${f.id} is missing the depth contract`).toContain('Depth contract');
       expect(text).toContain('predicts that none of them predicts alone');
@@ -284,47 +286,106 @@ describe('mixed-attitude lead (03 §3, the contrast case)', () => {
   });
 });
 
-describe('5W1H absent → computed default contexts (04 §b)', () => {
-  it('picks two or three taxonomy rows spanning distinct supply grades', () => {
+describe('section 3 — self-generated 5W1H scenarios', () => {
+  it('ignores the request context entirely', () => {
+    const withContext = assemblePrompt(sigA, {
+      what: 'ship a joint product with a feuding team',
+      when: 'hard external deadline, two weeks',
+      who: 'five people',
+    });
+    // Wire-compatible, and byte-for-byte irrelevant: the report supplies its own situations.
+    expect(withContext.userPrompt).toBe(assemblyA.userPrompt);
+    expect(withContext.scenarios).toEqual(assemblyA.scenarios);
+    expect(withContext.userPrompt).not.toContain('feuding team');
+    expect(withContext.userPrompt).not.toContain('five people');
+  });
+
+  it('spans the supply ladder: one flow, one stretch, one friction', () => {
+    const bands = assemblyA.scenarios.map((scenario) => scenario.band);
+    expect(bands).toContain('flow');
+    expect(bands).toContain('stretch');
+    expect(bands).toContain('friction');
+    expect(assemblyA.scenarios.length).toBeGreaterThanOrEqual(3);
+    expect(assemblyA.scenarios.length).toBeLessThanOrEqual(4);
+    // Each grade comes from the Signature, never re-derived.
+    for (const scenario of assemblyA.scenarios) {
+      expect(scenario.supplyGrade).toBe(sigA.supplyGrades[scenario.demands[0]!]);
+    }
+    // Distinct taxonomy rows: the same situation is never reused under two bands.
+    const rows = assemblyA.scenarios.map((scenario) => scenario.row);
+    expect(new Set(rows).size).toBe(rows.length);
+  });
+
+  it('adds an escalation scenario only where a firm eruption candidate exists', () => {
+    // Profile A: Fe below a 13-point cliff is a firm candidate.
+    const eruption = assemblyA.scenarios.find((scenario) => scenario.band === 'eruption-risk');
+    expect(eruption).toBeDefined();
+    expect(eruption!.eruptionFn).toBe('Fe');
+    expect(eruption!.demands).toContain('Fe');
+    expect(eruption!.modifiers).toHaveLength(3);
+    expect(eruption!.modifiers.join(' ')).toContain('sustained duration');
+    expect(eruption!.modifiers.join(' ')).toContain('no exit');
+    expect(eruption!.modifiers.join(' ')).toContain('evaluative audience');
+
+    // Profile B: Fi sits below a gap, not a cliff — watch grade only, so no such scenario.
+    expect(sigB.eruption.firm).toHaveLength(0);
+    expect(assemblyB.scenarios.some((scenario) => scenario.band === 'eruption-risk')).toBe(false);
+    expect(assemblyB.scenarios.every((scenario) => scenario.modifiers.length === 0)).toBe(true);
+  });
+
+  it('gives every scenario a complete 5W1H frame', () => {
     for (const assembly of [assemblyA, assemblyB, assemblyMixed]) {
-      const rows = assembly.defaultContexts;
-      expect(rows.length).toBeGreaterThanOrEqual(2);
-      expect(rows.length).toBeLessThanOrEqual(3);
-      const grades = new Set(rows.map((row) => row.supplyGrade));
-      expect(grades.size).toBe(rows.length);
-      for (const row of rows) {
-        expect(row.supplyGrade).toBe(assembly === assemblyA ? sigA.supplyGrades[row.demands[0]!] : row.supplyGrade);
+      for (const scenario of assembly.scenarios) {
+        for (const field of ['who', 'what', 'when', 'where', 'why', 'how'] as const) {
+          expect(scenario.frame[field], `${scenario.id} is missing ${field}`).toBeTruthy();
+        }
       }
     }
   });
 
-  it('prefers one flow, one stretch and one friction row where all three exist', () => {
-    expect(computeDefaultContexts(sigA).map((row) => row.supplyGrade)).toEqual([
-      'flow',
-      'scaffolded-stretch',
-      'friction',
-    ]);
+  it('instructs the vignette shape: 5W1H frame, 3-4 signatures, trade-off line', () => {
+    const feature_ = feature(assemblyA.renderPlan, 'scenarios');
+    const text = feature_.instructions.join(' ');
+    expect(feature_.section).toBe(3);
+    expect(text).toContain(`Render ALL ${assemblyA.scenarios.length} scenarios`);
+    expect(text).toContain('Who / What / When / Where / Why / How');
+    expect(text).toContain('THREE TO FOUR if-then signatures');
+    expect(text).toContain('one trade-off line');
+    expect(text).toContain('these situations are hypothetical');
+    expect(text).toContain(DEMAND_WEIGHTING_RULE);
+    // Every scenario is spelled out with its band, row, grade and frame.
+    for (const scenario of assemblyA.scenarios) {
+      expect(text).toContain(`SCENARIO ${scenario.band.toUpperCase()}`);
+      expect(text).toContain(scenario.demandType);
+    }
+    expect(text).toContain('eruption risk is FLAGGED for Fe');
+    expect(feature_.budgetWords).toBe(assemblyA.scenarios.length * 190);
   });
 
-  it('tells the model plainly that these are common contexts, not personalization', () => {
-    expect(assemblyA.contextProvided).toBe(false);
-    expect(assemblyA.userPrompt).toContain('common contexts');
-    expect(assemblyA.userPrompt).toContain('not personalization');
-    expect(feature(assemblyA.renderPlan, 'friction-map').instructions.join(' ')).toContain(
-      DEMAND_WEIGHTING_RULE,
+  it('never frames the scenarios as the reader’s own situation', () => {
+    for (const assembly of [assemblyA, assemblyB, assemblyMixed]) {
+      expect(assembly.userPrompt).not.toContain('as the person wrote it');
+      expect(assembly.userPrompt).not.toContain('No 5W1H situation was supplied');
+      expect(assembly.userPrompt).not.toContain('common contexts');
+      expect(assembly.userPrompt).toContain('Never imply the reader described any of them');
+    }
+  });
+
+  it('drops the intake-schema fragment, keeps the rest of the machinery', () => {
+    for (const assembly of [assemblyA, assemblyB, assemblyMixed]) {
+      expect(assembly.fragmentKeys).not.toContain('friction.intake-schema');
+      expect(assembly.fragmentKeys).toContain('friction.demand-taxonomy');
+      expect(assembly.fragmentKeys).toContain('friction.classification');
+      expect(assembly.fragmentKeys).toContain('friction.modifiers');
+      expect(assembly.fragmentKeys).toContain('friction.template');
+    }
+  });
+
+  it('computes scenarios deterministically from the signature alone', () => {
+    expect(computeScenarios(sigA)).toEqual(assemblyA.scenarios);
+    expect(computeScenarios(sigA).map((s) => s.band)).toEqual(
+      computeScenarios(sigA).map((s) => s.band),
     );
-  });
-
-  it('uses the supplied 5W1H instead when one arrives', () => {
-    const withContext = assemblePrompt(sigA, {
-      what: 'ship a joint product with a feuding team',
-      when: 'hard external deadline, two weeks',
-    });
-    expect(withContext.contextProvided).toBe(true);
-    expect(withContext.defaultContexts).toHaveLength(0);
-    expect(withContext.userPrompt).toContain('hard external deadline, two weeks');
-    expect(withContext.fragmentKeys).toContain('friction.demand-taxonomy');
-    expect(withContext.fragmentKeys).toContain('friction.template');
   });
 });
 
@@ -343,9 +404,9 @@ describe('FLAT regime → honest null, no fragments, no LLM', () => {
   it('still explains the framework, so a flat report is substantial without lying', () => {
     const report = assemblyFlat.honestNullReport ?? '';
     // Both canonical headings, in report order, so the client's cards still match.
-    expect(report.indexOf('## How this reading was made')).toBeGreaterThanOrEqual(0);
-    expect(report.indexOf('## How this reading was made')).toBeLessThan(
-      report.indexOf('## What this report cannot know'),
+    expect(report.indexOf('## Where this report comes from')).toBeGreaterThanOrEqual(0);
+    expect(report.indexOf('## Where this report comes from')).toBeLessThan(
+      report.indexOf("## What this report can't tell you"),
     );
     expect(report).toContain(FRAMEWORK_PROVENANCE_TEXT);
     for (const fact of [
@@ -406,9 +467,11 @@ describe('STAIRCASE regime → weak signal only', () => {
     ]);
     // The weak-signal feature plus the framework-provenance section, and nothing else.
     expect(assembly.renderPlan.map((f) => f.id)).toEqual(['weak-signal:staircase', 'provenance']);
-    expect(assembly.renderPlan[0]!.instructions.join(' ')).toContain('upper edge');
+    expect(assembly.renderPlan[0]!.instructions.join(' ')).toContain('the habits you use most');
     expect(assembly.renderPlan[0]!.instructions.join(' ')).toContain('the honest output is SHORT');
-    expect(assembly.defaultContexts).toEqual([]);
+    // No bands resolve, so no demand can be graded: no scenarios, and section 3 says so.
+    expect(assembly.scenarios).toEqual([]);
+    expect(assembly.userPrompt).toContain('No scenarios were generated');
   });
 });
 
@@ -429,7 +492,7 @@ describe('user prompt hygiene', () => {
 
     const signatureBlock = assemblyA.userPrompt.slice(0, planStart);
     expect(signatureBlock).toContain('39.6');
-    expect(signatureBlock).toContain('never re-derive or rank inside ties');
+    expect(signatureBlock).toContain('PRIVATE EVIDENCE');
   });
 
   it('names the six headings, in order, and ends with the disclaimer', () => {
@@ -457,9 +520,11 @@ describe('user prompt hygiene', () => {
     expect(assemblyA.budgetWords).toBe(words);
     expect(assemblyA.maxTokens).toBeGreaterThan(words);
     expect(assemblyA.maxTokens).toBeLessThanOrEqual(MAX_COMPLETION_TOKENS);
-    // 2000+ words of output needs materially more headroom than the old 4096 cap.
-    expect(MAX_COMPLETION_TOKENS).toBe(8000);
-    expect(assemblyA.maxTokens).toBeGreaterThan(4096);
+    // Unbounded thinking shares this budget, so the cap is the model ceiling — big enough
+    // that reasoning cannot starve a 2000+ word report.
+    expect(MAX_COMPLETION_TOKENS).toBe(32000);
+    // Prose budget plus a large reasoning headroom, well above an output-only cap.
+    expect(assemblyA.maxTokens).toBeGreaterThan(words + 4000);
   });
 });
 
@@ -478,8 +543,11 @@ describe('comprehensive format — length contract', () => {
 
   it('states the minimum, the target and the anti-filler rule in the prompt', () => {
     expect(assemblyA.userPrompt).toContain(`HARD MINIMUM ${MIN_REPORT_WORDS} words`);
+    // The plan's own total is the target; the documented band is named as the normal range,
+    // so a feature-rich profile is never told to write less than its plan allocates.
+    expect(assemblyA.userPrompt).toContain(`Target: this plan's own total, ~${assemblyA.budgetWords} words`);
     expect(assemblyA.userPrompt).toContain(
-      `target ${TARGET_REPORT_WORDS[0]}–${TARGET_REPORT_WORDS[1]}`,
+      `lands in ${TARGET_REPORT_WORDS[0]}–${TARGET_REPORT_WORDS[1]}`,
     );
     expect(assemblyA.userPrompt).toContain(`Total allocated budget: ~${assemblyA.budgetWords} words`);
     expect(assemblyA.userPrompt).toContain('never with generic prose');
@@ -496,16 +564,11 @@ describe('comprehensive format — length contract', () => {
   });
 
   it('deepens section 3 rather than padding it', () => {
-    const withContext = assemblePrompt(sigA, { what: 'ship a joint product', when: 'two weeks' });
-    const supplied = feature(withContext.renderPlan, 'friction-map');
-    expect(supplied.instructions.join(' ')).toContain('THREE TO FOUR if-then signatures per demand');
-    expect(supplied.budgetWords).toBeGreaterThanOrEqual(500);
-
-    const defaults = feature(assemblyA.renderPlan, 'friction-map');
-    expect(defaults.instructions.join(' ')).toContain(
-      `render ALL ${assemblyA.defaultContexts.length} contexts FULLY`,
-    );
-    expect(defaults.budgetWords).toBeGreaterThanOrEqual(360);
+    const scenarios = feature(assemblyA.renderPlan, 'scenarios');
+    expect(scenarios.instructions.join(' ')).toContain('THREE TO FOUR if-then signatures');
+    // Budgeted per scenario, so a four-scenario profile gets a longer section than a three.
+    expect(scenarios.budgetWords).toBe(assemblyA.scenarios.length * 190);
+    expect(scenarios.budgetWords).toBeGreaterThanOrEqual(380);
   });
 
   it('gives each firm eruption candidate full depth, still capped at two', () => {
@@ -521,15 +584,15 @@ describe('comprehensive format — length contract', () => {
   });
 });
 
-describe('section 6 — "How this reading was made"', () => {
-  it('names the exact heading, after Levers and before the limits section', () => {
+describe('section 6 — "Where this report comes from"', () => {
+  it('names the exact heading, after Things you can try and before the limits section', () => {
     expect(REPORT_HEADINGS).toHaveLength(6);
-    expect(REPORT_HEADINGS[4]).toBe('## How this reading was made');
-    expect(REPORT_HEADINGS.indexOf('## How this reading was made')).toBe(
-      REPORT_HEADINGS.indexOf('## Levers') + 1,
+    expect(REPORT_HEADINGS[4]).toBe('## Where this report comes from');
+    expect(REPORT_HEADINGS.indexOf('## Where this report comes from')).toBe(
+      REPORT_HEADINGS.indexOf('## Things you can try') + 1,
     );
-    expect(REPORT_HEADINGS.indexOf('## What this report cannot know')).toBe(
-      REPORT_HEADINGS.indexOf('## How this reading was made') + 1,
+    expect(REPORT_HEADINGS.indexOf("## What this report can't tell you")).toBe(
+      REPORT_HEADINGS.indexOf('## Where this report comes from') + 1,
     );
   });
 
@@ -613,8 +676,8 @@ describe('system prompt — rule hierarchy', () => {
       'C5 — hard, unchanged',
       'C6 — hard, unchanged',
       'Tier audibility rule',
-      'ASD-STE100',
-      'IELTS 6.0',
+      'Plain language standard',
+      'never studied psychology',
       'Type codes or type nouns',
     ]) {
       expect(SYSTEM_PROMPT).toContain(rule);
