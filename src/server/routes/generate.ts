@@ -142,6 +142,13 @@ generateRoute.post('/generate', async (c) => {
       for await (const item of streamReport({
         system: assembly.systemPrompt,
         user: assembly.userPrompt,
+        // Prompted-reasoning support: the headings mark the plan/report boundary for the
+        // prelude splitter, and the no-plan prompt is the one-shot retry when the plan
+        // swallows the report. Both are inert on the native-thinking and `none` paths.
+        // WITHOUT these two lines the splitter never engages and the plan would stream
+        // into the report as content — do not remove them while the prompted default is on.
+        ...(assembly.userPromptNoPlan === null ? {} : { fallbackUser: assembly.userPromptNoPlan }),
+        reportHeadings: assembly.reportHeadings,
         maxTokens: assembly.maxTokens,
         signal: abort.signal,
       })) {

@@ -9,27 +9,33 @@
  * documented no-op while thinking is ON — it only shapes the `none` (thinking off) path.
  *
  * REASONING: deepseek-v4-flash is a hybrid reasoning model. It emits `reasoning_content`
- * (thinking) alongside `content` (the answer). Thinking is switched with the documented
- * `thinking: { type: 'enabled' | 'disabled' }` parameter and is ON by default, bounded to
- * the shortest documented effort (see DEFAULT_REASONING_EFFORT). `reasoning_content` is
- * streamed to the reader as a separate `thinking` SSE event (see routes/generate.ts),
- * clearly labeled raw scratch work, and NEVER buffered, audited, or given the disclaimer;
- * only `content` is the report. Empty/truncated failure modes are judged on content alone
- * (see `classifyStreamOutcome`). Because thinking tokens are billed against `max_tokens`,
- * MAX_COMPLETION_TOKENS is set to the model ceiling and TIMEOUT_MS is wide. Set
- * DEEPSEEK_REASONING_EFFORT=none for a fast, cheap no-thinking pass.
+ * (thinking) alongside `content` (the answer), switched with the documented
+ * `thinking: { type: 'enabled' | 'disabled' }` parameter. Native thinking proved
+ * unsteerable (effort is a bias, not a cap; see DEFAULT_REASONING_MODE), so the DEFAULT
+ * path is now PROMPTED reasoning: thinking OFF on the wire, and the prompt scripts a
+ * bounded planning pass the model writes in the content stream before the first report
+ * heading (assemble.ts PLANNING_PASS; spec in docs/superpowers/specs/). The prelude
+ * splitter (prelude.ts) re-tags everything before that heading as `thinking`, so it rides
+ * the same SSE event native reasoning used: streamed to the reader as raw scratch work,
+ * NEVER buffered, audited, or given the disclaimer; only post-heading `content` is the
+ * report. Empty/truncated failure modes are judged on content alone (see
+ * `classifyStreamOutcome`). Native thinking remains available via
+ * DEEPSEEK_REASONING_EFFORT=low/high/max/default; `none` is the fast no-reasoning pass
+ * (no thinking, no plan).
  */
 
 import OpenAI from 'openai';
 
+import { createPreludeSplitter } from './prelude';
+
 export const DEFAULT_MODEL = 'deepseek-v4-flash';
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 export const TEMPERATURE = 0.5;
-// Total wall-clock budget per attempt. Thinking is on by default, and at the deeper
-// efforts ('default'/'max') the model can think for minutes on a large prompt before it
-// writes a single byte (nothing streams during the thinking phase). 600s gives that room
-// while still capping a genuinely hung connection. Set DEEPSEEK_REASONING_EFFORT=none for
-// the fast (~48s) no-thinking path.
+// Total wall-clock budget per attempt. Sized for the native-thinking fallback path: at
+// the deeper efforts ('default'/'max') the model can think for minutes on a large prompt
+// before it writes a single byte (nothing streams during the thinking phase). 600s gives
+// that room while still capping a genuinely hung connection. The prompted default and
+// `none` stream from the first seconds and finish far inside it.
 export const TIMEOUT_MS = 600_000;
 // Pre-stream retries for transient failures (connection reset, 429, 5xx). Only ever
 // attempted before the first byte reaches the client, so a retry can never double a
@@ -43,49 +49,62 @@ const RETRY_BACKOFF_MS = [250, 750];
  * profile plus the verbatim disclaimer without truncating mid-section. Comfortable, but
  * only because reasoning tokens no longer compete for the same budget.
  */
-// Reasoning is ON by default (see DEFAULT_REASONING_EFFORT). The model's hidden thinking
-// tokens are billed against this same budget, so it must cover BOTH the reasoning pass
-// (a few thousand tokens on a rich profile) AND the 2000-3000 word report (~4500 tokens).
-// 16000 leaves comfortable headroom; the truncation guard catches the rare overrun.
+// On the native-thinking fallback path the model's hidden thinking tokens are billed
+// against this same budget, so the ceiling must cover BOTH the reasoning pass (a few
+// thousand tokens on a rich profile) AND the 2000-3000 word report (~4500 tokens). The
+// prompted default asks for far less (assemble sizes maxTokens per mode); this is the
+// clamp, not the ask.
 export const MAX_COMPLETION_TOKENS = 32000;
 
 /** The effort levels DeepSeek documents (thinking_mode guide). Nothing else exists. */
 export type DeepSeekReasoningEffort = 'low' | 'high' | 'max';
 
 /**
- * Thinking ON but BOUNDED by default. Per the DeepSeek thinking_mode guide, reasoning is
- * switched with the dedicated `thinking: { type: 'enabled' | 'disabled' }` parameter (see
- * buildChatRequest); `reasoning_effort` is a SEPARATE knob sent alongside it. The docs
- * table promises `low` / `high` / `max` (and maps `medium`/`xhigh` → `high`); the API's
- * real accepted enum (from a live 400 message, verified 2026-08-27) is OpenAI's full set —
- * none/minimal/low/medium/high/xhigh/max — and anything OUTSIDE it is REJECTED with a 400,
- * so the typo-fallback below is what keeps a bad deploy variable from failing every
- * report. Values are normalized here to the three documented levels; omitting the knob
- * means DeepSeek's server default, `high` (verified live via its prompt-scaffolding size:
- * low/minimal +0, high +79, max +92 prompt tokens on an identical request).
+ * PROMPTED reasoning by default. Native thinking's `reasoning_effort` is a BIAS, not a
+ * hard cap: benchmarked live, a hard prompt drove EVERY level (low included) to spend
+ * the entire max_tokens budget thinking and return zero content — the empty-report case
+ * classifyStreamOutcome exists to catch — and the thinking itself takes no instruction
+ * about what to consider or how to conclude. So the default sends
+ * `thinking: { type: 'disabled' }` and scripts the reasoning in the prompt instead: a
+ * bounded planning pass written in the content stream before the first report heading,
+ * split off by prelude.ts and surfaced on the same `thinking` SSE event. Steerable
+ * (edit the prompt), truly capped (max_tokens is output-only again), and temperature
+ * applies (it is a documented no-op while thinking is ON).
  *
- * Effort is a BIAS, not a hard cap: benchmarked live, a hard prompt drove EVERY level
- * (low included) to spend the entire max_tokens budget thinking and return zero content —
- * the empty-report case classifyStreamOutcome exists to catch. streamReport therefore
- * enforces the cap itself (see REPORT_RESERVE_TOKENS): runaway thinking is abandoned
- * before it can eat the report's share, and the attempt is rerun once with thinking
- * disabled, so exhaustion never surfaces to the reader as a failure.
+ * Native thinking stays reachable for comparison. Per the DeepSeek thinking_mode guide,
+ * `thinking` is the on/off switch and `reasoning_effort` a SEPARATE knob: the docs table
+ * promises `low` / `high` / `max` (mapping `medium`/`xhigh` → `high`); the API's real
+ * accepted enum (from a live 400 message, verified 2026-08-27) is OpenAI's full set, and
+ * anything OUTSIDE it is REJECTED with a 400, so the typo-fallback below is what keeps a
+ * bad deploy variable from failing every report. Omitting the knob means DeepSeek's
+ * server default, `high` (verified live via its prompt-scaffolding size).
  *
  * Control with DEEPSEEK_REASONING_EFFORT. NOTE: tsx watch does NOT reload .env — fully
  * restart `npm run dev:server` after changing it, or the old value stays live.
- *   `none`    → thinking OFF, fastest (~48s), no thinking panel content;
- *   `low`     → shortest thinking (the default here; `minimal` behaves identically);
- *   `high`    → deeper (aliases: `medium`, `xhigh`, per DeepSeek's own compat table);
+ *   (unset) / `prompted` → thinking OFF, scripted plan in-stream (the default);
+ *   `none`    → thinking OFF and NO plan, fastest, no thinking panel content;
+ *   `low`     → shortest native thinking (`minimal` behaves identically);
+ *   `high`    → deeper native thinking (aliases: `medium`, `xhigh`);
  *   `max`     → deepest, slowest (can take minutes on a 16k prompt);
  *   `default` → send no knob; DeepSeek's server-side default applies (currently `high`).
  */
-export const DEFAULT_REASONING_EFFORT: DeepSeekReasoningEffort = 'low';
+export const PROMPTED_REASONING = 'prompted';
+
+/** What an unset (or typo'd) DEEPSEEK_REASONING_EFFORT resolves to. */
+export const DEFAULT_REASONING_MODE = PROMPTED_REASONING;
 
 /** The sentinel that means "send no reasoning_effort at all". */
 export const OMIT_REASONING_EFFORT = 'default';
 
 /** The sentinel that turns thinking OFF (via the `thinking` switch, not an effort). */
 export const DISABLE_REASONING = 'none';
+
+/** Everything resolveReasoningEffort can return; null means "omit the knob". */
+export type ResolvedReasoningMode =
+  | DeepSeekReasoningEffort
+  | typeof DISABLE_REASONING
+  | typeof PROMPTED_REASONING
+  | null;
 
 /**
  * Tokens held back for the report itself. DeepSeek offers no hard thinking cap (effort is
@@ -100,6 +119,33 @@ export const REPORT_RESERVE_TOKENS = 8000;
  * end). Deliberately LOW (English runs ~4) so the guard fires early, never late.
  */
 export const THINKING_CHARS_PER_TOKEN = 3;
+
+/**
+ * Tokens the prompted planning pass may spend, budgeted into maxTokens by assemble.ts on
+ * the prompted path. Owned HERE so the runaway guard below can never drift from what was
+ * actually reserved. Sized for the prompt's 1200-word plan ceiling (~2650 tokens at the
+ * 2.2 tokens/word convention) plus slack.
+ */
+export const PROMPTED_PLAN_HEADROOM_TOKENS = 3500;
+
+/**
+ * The prompted-mode analogue of the runaway guard: characters of planning pass allowed
+ * before any report content. DERIVED from the plan's own token headroom at the
+ * deliberately-low chars-per-token estimate, so the guard fires before the plan can
+ * spend past its budgeted share — mirroring how the native guard reserves the report's
+ * share of max_tokens. A genuine 1200-word plan (~8000 chars) fits comfortably under it;
+ * an attempt cut off here is rerun once with the no-plan prompt instead of silently
+ * eating the report's budget and dying on `length` mid-report.
+ */
+export const PRELUDE_RUNAWAY_CHARS = PROMPTED_PLAN_HEADROOM_TOKENS * THINKING_CHARS_PER_TOKEN;
+
+/**
+ * The floor below which forwarded content is not a report. A bare heading that leaked
+ * past the splitter (~45 chars) must never ship as a "successful" report with an
+ * auto-appended disclaimer; the shortest legitimate report (a STAIRCASE profile's) still
+ * runs thousands of characters. Judged at stream end by classifyStreamOutcome.
+ */
+export const MIN_REPORT_CONTENT_CHARS = 200;
 
 // Every accepted spelling, mapped onto a documented level. The API 400s on anything
 // outside its enum, and the docs table only promises low/high/max, so normalizing here
@@ -192,6 +238,17 @@ export function readConfig(): DeepSeekConfig {
 export interface StreamRequest {
   system: string;
   user: string;
+  /**
+   * The no-plan variant of `user` (assemble's userPromptNoPlan): the one-shot retry
+   * prompt for when the prompted plan swallows the report. Ignored off that path.
+   */
+  fallbackUser?: string;
+  /**
+   * The exact canonical headings for the report's language. Required for the prompted
+   * default to work: they are what the prelude splitter keys on. Without them the
+   * splitter stays off and content passes through untagged.
+   */
+  reportHeadings?: readonly string[];
   maxTokens?: number;
   /** Caller's cancellation (client disconnect). Composed with the 90s timeout. */
   signal?: AbortSignal;
@@ -221,14 +278,22 @@ export interface StreamReportItem {
  * rejects values outside its enum with a 400 invalid_request_error, so a typo in a deploy
  * variable would otherwise fail every report outright.
  */
-export function resolveReasoningEffort(
-  raw?: string | null,
-): DeepSeekReasoningEffort | typeof DISABLE_REASONING | null {
+export function resolveReasoningEffort(raw?: string | null): ResolvedReasoningMode {
   const value = (raw ?? '').trim();
-  if (value === '') return DEFAULT_REASONING_EFFORT; // unset → the bounded default (low)
+  if (value === '') return DEFAULT_REASONING_MODE; // unset → prompted plan, thinking off
+  if (value === PROMPTED_REASONING) return PROMPTED_REASONING; // explicit spelling of the default
   if (value === OMIT_REASONING_EFFORT) return null; // 'default' → omit; server default (high)
-  if (value === DISABLE_REASONING) return DISABLE_REASONING; // 'none' → thinking off
-  return EFFORT_ALIASES[value] ?? DEFAULT_REASONING_EFFORT; // level or alias; typo → default
+  if (value === DISABLE_REASONING) return DISABLE_REASONING; // 'none' → thinking off, no plan
+  return EFFORT_ALIASES[value] ?? DEFAULT_REASONING_MODE; // level or alias; typo → default
+}
+
+/**
+ * The mode the environment resolves to right now. Read per call on purpose — the same
+ * live value streamReport uses — so assemble's prompt and the stream splitter can never
+ * disagree about whether a planning pass was asked for.
+ */
+export function activeReasoningMode(): ResolvedReasoningMode {
+  return resolveReasoningEffort(process.env.DEEPSEEK_REASONING_EFFORT);
 }
 
 export interface ChatRequestInput {
@@ -245,9 +310,10 @@ export interface ChatRequestInput {
  */
 export function buildChatRequest(input: ChatRequestInput) {
   const effort = resolveReasoningEffort(input.reasoningEffort);
-  // 'none' is the one value that turns thinking OFF; everything else (a level, or null for
-  // the server default) turns it ON via the documented `thinking` switch.
-  const thinkingOn = effort !== DISABLE_REASONING;
+  // 'none' and 'prompted' both turn thinking OFF ('prompted' reasons in the content
+  // stream instead); a level, or null for the server default, turns it ON via the
+  // documented `thinking` switch.
+  const thinkingOn = effort !== DISABLE_REASONING && effort !== PROMPTED_REASONING;
   return {
     model: input.model,
     temperature: TEMPERATURE,
@@ -279,23 +345,34 @@ export interface StreamOutcome {
  * This is the guard against the empty-report defect recurring silently: a stream that ends
  * on `length`, or that carried no content at all, is a failure even though the HTTP call
  * succeeded.
+ *
+ * `minContentChars` raises the emptiness floor above the default (any content at all).
+ * The prompted path passes MIN_REPORT_CONTENT_CHARS: there, a stray bare heading leaking
+ * past the splitter is a plausible stream shape, and ~30 chars plus an auto-appended
+ * disclaimer must not ship as a finished report. Native/none paths keep the historical
+ * zero test — tiny content there is pure model degeneracy the wire has always surfaced
+ * as-is.
  */
-export function classifyStreamOutcome(outcome: StreamOutcome): DeepSeekError | null {
+export function classifyStreamOutcome(
+  outcome: StreamOutcome,
+  options?: { minContentChars?: number },
+): DeepSeekError | null {
+  const floor = options?.minContentChars ?? 1;
   const spentThinking =
     outcome.reasoningChars > 0
       ? ' The model spent part of its output budget on internal reasoning; set ' +
         'DEEPSEEK_REASONING_EFFORT=none to stop that.'
       : '';
 
-  if (outcome.contentChars === 0) {
+  if (outcome.contentChars < floor) {
     return new DeepSeekEmptyReportError(
-      'The report generator returned no report text.' +
+      `The report generator returned no usable report text (${outcome.contentChars} chars of content).` +
         spentThinking +
-        ' Nothing was written, so there is nothing to show; please try again.',
+        ' Nothing usable was written; please try again.',
       {
         publicMessage:
-          'The report generator finished without writing any report text. ' +
-          'Nothing was lost; please try again.',
+          'The report generator finished without writing your report. ' +
+          'Please try again.',
       },
     );
   }
@@ -324,9 +401,11 @@ export function classifyStreamOutcome(outcome: StreamOutcome): DeepSeekError | n
  * : once anything (thinking or content) has streamed there is nothing to rewind, and a
  * retry would replay the model's reasoning from scratch.
  *
- * `reasoning_content` deltas are surfaced as `thinking` items and counted, but never mixed
- * into the report: they are the model thinking aloud, and the route keeps them out of the
- * buffer that guards and the disclaimer see.
+ * Two sources feed the `thinking` items, never the report buffer that guards and the
+ * disclaimer see:
+ *   - `reasoning_content` deltas (native-thinking fallback path), surfaced and counted;
+ *   - in prompted mode, the planning pass: content deltas before the first canonical
+ *     heading, re-tagged by the prelude splitter (see prelude.ts and reportHeadings).
  */
 export async function* streamReport(request: StreamRequest): AsyncGenerator<StreamReportItem> {
   const config = readConfig();
@@ -338,7 +417,12 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
   // Thinking may spend at most the budget minus the report's reserve, estimated in chars
   // because usage arrives only after the stream ends.
   const runawayChars = Math.max(0, maxTokens - REPORT_RESERVE_TOKENS) * THINKING_CHARS_PER_TOKEN;
-  // One-shot: after the fallback, thinking is off, so a second exhaustion cannot happen.
+  // The prompted default needs the headings to find the plan/report boundary; without
+  // them the splitter stays off and content passes through untouched (test callers).
+  const prompted =
+    activeReasoningMode() === PROMPTED_REASONING && (request.reportHeadings?.length ?? 0) > 0;
+  // One-shot: after the fallback (thinking off, or the no-plan prompt), a second
+  // exhaustion cannot happen — nothing is left to over-spend on.
   let exhaustionFallback = false;
 
   let attempt = 0;
@@ -348,6 +432,8 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
     let contentChars = 0;
     let reasoningChars = 0;
     let finishReason: string | null = null;
+    // Recreated per attempt: a retry starts a fresh stream with its own plan boundary.
+    const splitter = prompted ? createPreludeSplitter(request.reportHeadings!) : null;
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), TIMEOUT_MS);
     const signal = composeSignals(timeout.signal, request.signal);
@@ -357,16 +443,19 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
         buildChatRequest({
           model: config.model,
           system: request.system,
-          user: request.user,
+          // The prompted fallback swaps the prompt (plan instructions stripped) instead
+          // of the thinking switch, which is already off on that path.
+          user: exhaustionFallback && request.fallbackUser ? request.fallbackUser : request.user,
           ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
-          reasoningEffort: exhaustionFallback
-            ? DISABLE_REASONING
-            : process.env.DEEPSEEK_REASONING_EFFORT,
+          reasoningEffort:
+            exhaustionFallback && !prompted
+              ? DISABLE_REASONING
+              : process.env.DEEPSEEK_REASONING_EFFORT,
         }),
         { signal },
       );
 
-      let runaway = false;
+      let runaway: 'thinking' | 'prelude' | null = null;
       for await (const chunk of stream) {
         const choice = chunk.choices?.[0];
         if (!choice) continue;
@@ -386,36 +475,80 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
           // stream) and rerun without thinking, instead of dying on `length` with an
           // empty report the reader would have to pay to retry.
           if (!exhaustionFallback && contentChars === 0 && reasoningChars > runawayChars) {
-            runaway = true;
+            runaway = 'thinking';
             break;
           }
         }
 
         const delta = choice.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) {
-          contentChars += delta.length;
+          // In prompted mode the splitter re-tags the plan as thinking; it is a
+          // pass-through once the report's first heading has been seen.
+          const pieces: StreamReportItem[] = splitter
+            ? splitter.push(delta)
+            : [{ kind: 'content', text: delta }];
+          for (const item of pieces) {
+            if (item.kind === 'content') contentChars += item.text.length;
+            else reasoningChars += item.text.length;
+            yielded = true;
+            yield item;
+          }
+          // The prompted analogue of the runaway guard: a plan far past its prompt
+          // ceiling with no heading in sight is abandoned, and the attempt rerun once
+          // with the no-plan prompt.
+          if (
+            splitter &&
+            !splitter.contentStarted &&
+            !exhaustionFallback &&
+            splitter.preludeChars > PRELUDE_RUNAWAY_CHARS
+          ) {
+            runaway = 'prelude';
+            break;
+          }
+        }
+      }
+
+      // The stream ended with the splitter still holding a partial line: plan tail.
+      if (runaway === null && splitter) {
+        for (const item of splitter.flush()) {
+          if (item.kind === 'content') contentChars += item.text.length;
+          else reasoningChars += item.text.length;
           yielded = true;
-          yield { kind: 'content', text: delta };
+          yield item;
         }
       }
 
       if (runaway) {
         exhaustionFallback = true;
         console.error(
-          `[deepseek] reasoning spent ~${Math.round(reasoningChars / THINKING_CHARS_PER_TOKEN)} ` +
-            `of the ${maxTokens}-token budget with no report text yet; ` +
-            'retrying once with thinking disabled.',
+          runaway === 'prelude'
+            ? `[deepseek] the planning pass ran past ${PRELUDE_RUNAWAY_CHARS} chars with no ` +
+                'report heading yet; retrying once with the no-plan prompt.'
+            : `[deepseek] reasoning spent ~${Math.round(reasoningChars / THINKING_CHARS_PER_TOKEN)} ` +
+                `of the ${maxTokens}-token budget with no report text yet; ` +
+                'retrying once with thinking disabled.',
         );
         continue;
       }
 
-      const outcome = classifyStreamOutcome({ contentChars, reasoningChars, finishReason });
+      const outcome = classifyStreamOutcome(
+        { contentChars, reasoningChars, finishReason },
+        // Only the prompted path raises the floor: a bare heading leaking past the
+        // splitter is a plausible shape there and must not ship as a finished report.
+        prompted ? { minContentChars: MIN_REPORT_CONTENT_CHARS } : undefined,
+      );
       if (outcome) {
         // The other exhaustion shape: the stream ended (typically on `length`) having
-        // written no content at all. Same remedy, same one-shot fallback.
-        if (outcome instanceof DeepSeekEmptyReportError && !exhaustionFallback) {
+        // written no content at all. Same remedy, same one-shot fallback. Gated on
+        // contentChars === 0, never the classifier's usability floor: a retry must not
+        // replay content the client has already rendered, so a sub-floor leak (a bare
+        // heading) surfaces as an honest error instead of a duplicated report.
+        if (outcome instanceof DeepSeekEmptyReportError && !exhaustionFallback && contentChars === 0) {
           exhaustionFallback = true;
-          console.error(`[deepseek] ${outcome.message} Retrying once with thinking disabled.`);
+          console.error(
+            `[deepseek] ${outcome.message} Retrying once ` +
+              `${prompted ? 'with the no-plan prompt' : 'with thinking disabled'}.`,
+          );
           continue;
         }
         throw outcome;

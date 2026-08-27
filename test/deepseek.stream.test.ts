@@ -185,3 +185,143 @@ describe('exhaustion guard: no reader-visible failure from reasoning exhaustion'
     expect(createSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('prompted reasoning: the plan rides content and is split off as thinking', () => {
+  const HEADING = '## How your mind tends to work';
+  // Real reports run thousands of chars; fixtures must clear the prompted path's
+  // MIN_REPORT_CONTENT_CHARS usability floor or they classify as empty.
+  const BODY = 'A real paragraph of report prose, long enough to be a report. '.repeat(5);
+  const request = {
+    system: 'sys',
+    user: 'usr-with-plan',
+    fallbackUser: 'usr-no-plan',
+    reportHeadings: [HEADING],
+  };
+
+  async function collectPrompted(): Promise<StreamReportItem[]> {
+    const items: StreamReportItem[] = [];
+    for await (const item of streamReport(request)) items.push(item);
+    return items;
+  }
+
+  it('re-tags the plan as thinking and the report (from the heading) as content', async () => {
+    // Env unset → prompted default: one call, thinking disabled on the wire.
+    scriptedChunks = [
+      chunk({ content: '1. Ni spike over Fe cliff.\n2. Compose ' }),
+      chunk({ content: `loop with floor.\n${HEADING}\n\n${BODY}` }),
+      chunk({}, 'stop'),
+    ];
+
+    const items = await collectPrompted();
+
+    expect(items.filter((i) => i.kind === 'thinking').map((i) => i.text).join('')).toBe(
+      '1. Ni spike over Fe cliff.\n2. Compose loop with floor.\n',
+    );
+    expect(items.filter((i) => i.kind === 'content').map((i) => i.text).join('')).toBe(
+      `${HEADING}\n\n${BODY}`,
+    );
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const sent = createSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(sent.thinking).toEqual({ type: 'disabled' });
+    expect('reasoning_effort' in sent).toBe(false);
+  });
+
+  it('retries once with the no-plan prompt when the plan swallows the report', async () => {
+    // The whole stream is plan (no heading ever): content-wise it is an empty report, and
+    // the one-shot fallback swaps in the prompt without the planning pass.
+    scriptedRuns = [
+      [chunk({ content: 'planning forever, never a heading ' }), chunk({}, 'stop')],
+      [chunk({ content: `${HEADING}\n\n${BODY}` }), chunk({}, 'stop')],
+    ];
+
+    const items = await collectPrompted();
+
+    // The abandoned plan still reached the reader as thinking; the report is complete.
+    expect(items.some((i) => i.kind === 'thinking' && i.text.includes('planning forever'))).toBe(
+      true,
+    );
+    expect(items.filter((i) => i.kind === 'content').map((i) => i.text).join('')).toBe(
+      `${HEADING}\n\n${BODY}`,
+    );
+    expect(createSpy).toHaveBeenCalledTimes(2);
+    const first = createSpy.mock.calls[0]?.[0] as { messages: Array<{ content: string }> };
+    const retry = createSpy.mock.calls[1]?.[0] as {
+      messages: Array<{ content: string }>;
+      thinking: unknown;
+    };
+    expect(first.messages[1]?.content).toBe('usr-with-plan');
+    expect(retry.messages[1]?.content).toBe('usr-no-plan');
+    // Thinking stays off on the retry — the fallback swaps the prompt, not the switch.
+    expect(retry.thinking).toEqual({ type: 'disabled' });
+    expect(console.error).toHaveBeenCalled();
+  });
+
+  it('abandons a runaway plan before it can eat the report budget', async () => {
+    // PRELUDE_RUNAWAY_CHARS is derived from the 3500-token plan headroom (× 3 chars/token
+    // = 10500): a plan past what was actually budgeted for it, with no heading in sight,
+    // is cut off mid-stream and the attempt rerun with the no-plan prompt.
+    scriptedRuns = [
+      [
+        chunk({ content: 'x'.repeat(11_000) }),
+        chunk({ content: 'never consumed: the guard aborts first' }),
+      ],
+      [chunk({ content: `${HEADING}\n\n${BODY}` }), chunk({}, 'stop')],
+    ];
+
+    const items = await collectPrompted();
+
+    expect(items.filter((i) => i.kind === 'content').map((i) => i.text).join('')).toBe(
+      `${HEADING}\n\n${BODY}`,
+    );
+    expect(createSpy).toHaveBeenCalledTimes(2);
+    const retry = createSpy.mock.calls[1]?.[0] as { messages: Array<{ content: string }> };
+    expect(retry.messages[1]?.content).toBe('usr-no-plan');
+    expect(console.error).toHaveBeenCalled();
+  });
+
+  it('surfaces the empty-report error when even the no-plan retry writes nothing', async () => {
+    scriptedRuns = [
+      [chunk({ content: 'plan only ' }), chunk({}, 'stop')],
+      [chunk({ content: 'still no heading ' }), chunk({}, 'stop')],
+    ];
+
+    await expect(collectPrompted()).rejects.toBeInstanceOf(DeepSeekEmptyReportError);
+    expect(createSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses to ship a bare leaked heading as a report, and never replays streamed content', async () => {
+    // The plan ends, one canonical heading leaks through the splitter as content, the
+    // stream stops cleanly. Under 200 chars of content is not a report — but the heading
+    // already reached the client, so retrying would duplicate it in the report buffer.
+    // The honest outcome is an error, in ONE attempt.
+    scriptedChunks = [
+      chunk({ content: 'short plan\n' }),
+      chunk({ content: HEADING }),
+      chunk({}, 'stop'),
+    ];
+
+    await expect(collectPrompted()).rejects.toBeInstanceOf(DeepSeekEmptyReportError);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not split when native thinking is selected: the splitter is prompted-only', async () => {
+    // With an explicit level the model owns its reasoning channel; content before the
+    // heading (there should be none) must not be re-tagged.
+    process.env.DEEPSEEK_REASONING_EFFORT = 'low';
+    scriptedChunks = [
+      chunk({ reasoning_content: 'native thinking ' }),
+      chunk({ content: `${HEADING}\n\nReport.` }),
+      chunk({}, 'stop'),
+    ];
+
+    const items = await collectPrompted();
+
+    expect(items).toEqual([
+      { kind: 'thinking', text: 'native thinking ' },
+      { kind: 'content', text: `${HEADING}\n\nReport.` },
+    ]);
+    const sent = createSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(sent.thinking).toEqual({ type: 'enabled' });
+    expect(sent.reasoning_effort).toBe('low');
+  });
+});

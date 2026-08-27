@@ -241,7 +241,7 @@ Generator rules:
 
 # Output format
 
-Markdown, exactly the six headings the user message specifies, in its report language and order. Nothing before the first heading and nothing after the disclaimer: no preamble, no meta-commentary, no section 1, no closing pleasantry.`;
+Markdown, exactly the six headings the user message specifies, in its report language and order. Nothing before the first heading — except the planning pass when, and only when, the user message explicitly asks for one — and nothing after the disclaimer: no preamble, no meta-commentary, no section 1, no closing pleasantry.`;
 
 /** Word count of the contract, for the budget assertions in tests. */
 export const SYSTEM_PROMPT_WORDS = SYSTEM_PROMPT.trim().split(/\s+/).length;

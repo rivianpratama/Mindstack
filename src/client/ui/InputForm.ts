@@ -41,16 +41,21 @@ export const AXIS_LABELS: Readonly<Record<AxisKey, string>> = {
   'Te-Fi': 'Te – Fi',
 };
 
-/** The worked example threaded through the docs (02 §5 / 05 §5.7, Profile A). */
+/**
+ * Defaults for the "fill example" button - a real Sakinorva result
+ * (Ne-dominant, ENTP-ish). Kept deliberately distinct from the docs'
+ * synthetic Profile A (02 §5 / 05 §5.7), which the geometry and prompt
+ * tests pin on their own values.
+ */
 export const EXAMPLE_SCORES: Readonly<Record<FunctionKey, number>> = {
-  Ni: 39.6,
-  Ti: 34,
-  Te: 31,
-  Fi: 30,
-  Ne: 25.4,
-  Se: 25,
+  Ne: 45,
+  Ni: 36,
+  Ti: 30,
+  Se: 29,
+  Te: 29,
+  Fe: 29,
+  Fi: 29,
   Si: 21,
-  Fe: 8,
 };
 
 export interface InputFormApi {
@@ -119,7 +124,7 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
       'p',
       'card-sub',
       'From the Sakinorva cognitive-functions test. Roughly 0 to 50 each. Nothing is stored. ' +
-        'Everything is computed in your browser.',
+      'Everything is computed in your browser.',
     ),
   );
 
@@ -232,7 +237,7 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
   submit.type = 'submit';
   actions.appendChild(submit);
 
-  const example = el('button', 'example-link', 'fill example (Profile A)');
+  const example = el('button', 'example-link', 'fill example');
   example.type = 'button';
   actions.appendChild(example);
 

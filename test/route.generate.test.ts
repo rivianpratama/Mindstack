@@ -14,6 +14,9 @@ import { getDisclaimer } from '../src/server/kb/loader';
 const control = vi.hoisted(() => ({
   items: [] as Array<{ kind: 'thinking' | 'content'; text: string }>,
   error: null as unknown,
+  // Every StreamRequest the route actually sent — the prompted-reasoning wiring
+  // (reportHeadings, fallbackUser) lives or dies on these fields reaching streamReport.
+  requests: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('../src/server/deepseek', async (importActual) => {
@@ -21,7 +24,8 @@ vi.mock('../src/server/deepseek', async (importActual) => {
   return {
     ...actual, // keeps the real error classes, so a thrown one is `instanceof` the real type
     isConfigured: () => true,
-    streamReport: async function* () {
+    streamReport: async function* (request: Record<string, unknown>) {
+      control.requests.push(request);
       for (const item of control.items) yield item;
       if (control.error) throw control.error;
     },
@@ -68,6 +72,7 @@ const withDisclaimer = (body: string) => `${body}\n\n> ${getDisclaimer()}`;
 beforeEach(() => {
   control.items = [];
   control.error = null;
+  control.requests = [];
 });
 
 afterEach(() => {
@@ -184,6 +189,68 @@ describe('POST /api/generate — thinking + content streaming', () => {
     expect(events).not.toContain('audit');
     expect(events).not.toContain('done');
     errorSpy.mockRestore();
+  });
+});
+
+describe('POST /api/generate — prompted-reasoning wiring to streamReport', () => {
+  // The route test's stub used to swallow its argument, so deleting the wiring below
+  // passed the whole suite while, in production, the splitter silently stayed off and the
+  // plan streamed into the audited report. These pins make that regression fail loudly.
+  const withMode = async (value: string | undefined, run: () => Promise<void>) => {
+    const prior = process.env.DEEPSEEK_REASONING_EFFORT;
+    if (value === undefined) delete process.env.DEEPSEEK_REASONING_EFFORT;
+    else process.env.DEEPSEEK_REASONING_EFFORT = value;
+    try {
+      await run();
+    } finally {
+      if (prior === undefined) delete process.env.DEEPSEEK_REASONING_EFFORT;
+      else process.env.DEEPSEEK_REASONING_EFFORT = prior;
+    }
+  };
+
+  it('threads the English headings and the no-plan retry prompt on the default path', async () => {
+    await withMode('prompted', async () => {
+      control.items = [
+        { kind: 'content', text: withDisclaimer('## How your mind tends to work\n\nBody.') },
+      ];
+      await post(PROFILE_A);
+      const request = control.requests.at(-1)!;
+      expect(request.reportHeadings).toEqual([
+        '## How your mind tends to work',
+        '## How you handle different situations',
+        '## When things get stressful',
+        '## Things you can try',
+        '## Where this report comes from',
+        "## What this report can't tell you",
+      ]);
+      expect(request.user).toContain('PLANNING PASS');
+      expect(typeof request.fallbackUser).toBe('string');
+      expect(request.fallbackUser).not.toContain('PLANNING PASS');
+    });
+  });
+
+  it('threads the Indonesian headings for an "id" request', async () => {
+    await withMode('prompted', async () => {
+      control.items = [
+        { kind: 'content', text: '## Cara pikiranmu biasanya bekerja\n\nIsi laporan.' },
+      ];
+      await post(PROFILE_A, { language: 'id' });
+      const request = control.requests.at(-1)!;
+      expect((request.reportHeadings as string[])[0]).toBe('## Cara pikiranmu biasanya bekerja');
+      expect(request.reportHeadings as string[]).toHaveLength(6);
+    });
+  });
+
+  it('sends no fallback prompt off the prompted path', async () => {
+    await withMode('none', async () => {
+      control.items = [
+        { kind: 'content', text: withDisclaimer('## How your mind tends to work\n\nBody.') },
+      ];
+      await post(PROFILE_A);
+      const request = control.requests.at(-1)!;
+      expect('fallbackUser' in request).toBe(false);
+      expect(request.user).not.toContain('PLANNING PASS');
+    });
   });
 });
 

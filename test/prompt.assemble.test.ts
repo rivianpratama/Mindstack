@@ -519,11 +519,118 @@ describe('user prompt hygiene', () => {
     expect(assemblyA.budgetWords).toBe(words);
     expect(assemblyA.maxTokens).toBeGreaterThan(words);
     expect(assemblyA.maxTokens).toBeLessThanOrEqual(MAX_COMPLETION_TOKENS);
-    // Unbounded thinking shares this budget, so the cap is the model ceiling — big enough
-    // that reasoning cannot starve a 2000+ word report.
+    // The clamp stays at the model ceiling so the native-thinking fallback path can never
+    // starve a 2000+ word report; the ask itself is the prose budget plus a reasoning
+    // headroom sized to the active mode (see the prompted-reasoning describe below).
     expect(MAX_COMPLETION_TOKENS).toBe(32000);
-    // Prose budget plus a large reasoning headroom, well above an output-only cap.
-    expect(assemblyA.maxTokens).toBeGreaterThan(words + 4000);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Prompted reasoning: the planning pass and the mode-sized headroom
+ * ------------------------------------------------------------------ */
+
+describe('prompted reasoning (the default): plan scripted in the prompt', () => {
+  /** Run one assembly under an explicit DEEPSEEK_REASONING_EFFORT, restoring the env. */
+  const assembleWith = (value: string | undefined) => {
+    const prior = process.env.DEEPSEEK_REASONING_EFFORT;
+    if (value === undefined) delete process.env.DEEPSEEK_REASONING_EFFORT;
+    else process.env.DEEPSEEK_REASONING_EFFORT = value;
+    try {
+      return assemblePrompt(sigA, null);
+    } finally {
+      if (prior === undefined) delete process.env.DEEPSEEK_REASONING_EFFORT;
+      else process.env.DEEPSEEK_REASONING_EFFORT = prior;
+    }
+  };
+
+  it('scripts the planning pass by default: the six stages, budget, and the guard lines', () => {
+    const prompted = assembleWith(undefined);
+    const prompt = prompted.userPrompt;
+    expect(prompt).toContain('PLANNING PASS (write this FIRST, before the first heading)');
+    // The six thinking stages, each a real procedure rather than a topic label.
+    expect(prompt).toContain('EVIDENCE SCAN');
+    expect(prompt).toContain('what did NOT fire');
+    expect(prompt).toContain('FEATURE READINGS');
+    expect(prompt).toContain('boldest defensible prediction');
+    expect(prompt).toContain('COMPOSITION HUNT');
+    expect(prompt).toContain('four to six candidate combinations');
+    expect(prompt).toContain('SCENARIO SKETCHES');
+    expect(prompt).toContain('ADVERSARIAL PASS');
+    expect(prompt).toContain('would the OPPOSITE profile');
+    expect(prompt).toContain('ARC AND CLOSE');
+    expect(prompt).toContain('through-line in one sentence');
+    // How much to think, and where the depth goes.
+    expect(prompt).toContain('500-900 words, never more than 1200');
+    expect(prompt).toContain('Spend the depth on stages 3 and 5');
+    // The two machinery-critical lines: no fake boundary, no Indonesian plan.
+    expect(prompt).toContain('no line starting with "#"');
+    expect(prompt).toContain('Write the plan in English');
+    // The heading rule now names the one licensed exception.
+    expect(prompt).toContain('except the planning pass described above');
+    // The report must not lean on the (stripped) plan.
+    expect(prompt).toContain('never write "as planned"');
+  });
+
+  it('licenses the plan in the system prompt output-format rule too', () => {
+    // The static contract says "nothing before the first heading"; without this
+    // exception the system prompt and the planning pass would contradict each other,
+    // and the model would obey whichever it happened to weight higher.
+    expect(SYSTEM_PROMPT).toContain(
+      'except the planning pass when, and only when, the user message explicitly asks',
+    );
+  });
+
+  it('assembles the no-plan retry prompt as a complete, self-sufficient prompt', () => {
+    const prompted = assembleWith(undefined);
+    expect(prompted.userPromptNoPlan).not.toBeNull();
+    const noPlan = prompted.userPromptNoPlan!;
+    expect(noPlan).not.toContain('PLANNING PASS');
+    expect(noPlan).toContain('with nothing before the first one (');
+    // Same evidence, same plan, same fragments: only the render instruction differs.
+    const upTo = (text: string) => text.slice(0, text.indexOf('# 5. RENDER INSTRUCTION'));
+    expect(upTo(noPlan)).toBe(upTo(prompted.userPrompt));
+    // The retry prompt ships ALONE, so its render-instruction tail must be complete —
+    // the prefix equality above cannot catch a plan:false branch dropping any of this.
+    expect(noPlan).toContain('Report language: ENGLISH');
+    expect(noPlan).toContain('Write Sections 2–7 ONLY');
+    for (const heading of REPORT_HEADINGS) expect(noPlan).toContain(`\`${heading}\``);
+    expect(hasDisclaimer(noPlan)).toBe(true);
+    expect(noPlan).toContain(`Total allocated budget: ~${prompted.budgetWords} words`);
+  });
+
+  it('exposes the canonical headings for the prelude splitter, per language', () => {
+    expect(assembleWith(undefined).reportHeadings).toEqual([...REPORT_HEADINGS]);
+    const id = assemblePrompt(sigA, null, 'id');
+    expect(id.reportHeadings[0]).toBe('## Cara pikiranmu biasanya bekerja');
+    expect(id.reportHeadings).toHaveLength(6);
+  });
+
+  it('sizes the headroom to the mode: native wide, prompted small, none nothing', () => {
+    const prompted = assembleWith(undefined);
+    const native = assembleWith('low');
+    const none = assembleWith('none');
+    // Native thinking bills long hidden reasoning against the same budget; the prompted
+    // plan is capped at 600 words; `none` reasons not at all.
+    expect(native.maxTokens).toBeGreaterThan(prompted.maxTokens);
+    expect(prompted.maxTokens).toBeGreaterThan(none.maxTokens);
+    expect(prompted.maxTokens - none.maxTokens).toBe(3500);
+  });
+
+  it('keeps the plan instructions OFF the native and none paths', () => {
+    for (const mode of ['low', 'high', 'max', 'default', 'none']) {
+      const assembly = assembleWith(mode);
+      expect(assembly.userPrompt, `mode ${mode} must not script a plan`).not.toContain(
+        'PLANNING PASS',
+      );
+      expect(assembly.userPromptNoPlan).toBeNull();
+    }
+  });
+
+  it('never scripts a plan for FLAT: there is no model call to plan for', () => {
+    const flat = assemblePrompt(sigFlat, null);
+    expect(flat.userPromptNoPlan).toBeNull();
+    expect(flat.reportHeadings).toEqual([...REPORT_HEADINGS]);
   });
 });
 

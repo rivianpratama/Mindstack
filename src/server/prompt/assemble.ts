@@ -41,7 +41,13 @@ import {
   type FunctionBlock,
   type ShapeId,
 } from '../kb/loader';
-import { MAX_COMPLETION_TOKENS } from '../deepseek';
+import {
+  activeReasoningMode,
+  DISABLE_REASONING,
+  MAX_COMPLETION_TOKENS,
+  PROMPTED_PLAN_HEADROOM_TOKENS,
+  PROMPTED_REASONING,
+} from '../deepseek';
 import { fullSystemPrompt } from './foundations';
 import {
   buildHonestNullReportId,
@@ -53,10 +59,29 @@ import {
   type ReportLanguage,
 } from './language';
 
-// Extra completion tokens reserved for the model's hidden reasoning pass (thinking is on
-// by default). Billed against the same max_tokens as the report, so it is added on top of
-// the prose budget rather than shared with it. Clamped by MAX_COMPLETION_TOKENS downstream.
-const REASONING_HEADROOM_TOKENS = 24000;
+// Extra completion tokens reserved for the model's reasoning, on top of the prose budget
+// (both bill against the same max_tokens) and clamped by MAX_COMPLETION_TOKENS downstream.
+// Sized to the active mode: native hidden thinking can run long; the prompted planning
+// pass gets PROMPTED_PLAN_HEADROOM_TOKENS (owned by deepseek.ts, which derives the
+// runaway guard from the same number so the two can never drift); `none` reasons not
+// at all.
+const NATIVE_REASONING_HEADROOM_TOKENS = 24000;
+
+function reasoningHeadroomTokens(): number {
+  const mode = activeReasoningMode();
+  if (mode === PROMPTED_REASONING) return PROMPTED_PLAN_HEADROOM_TOKENS;
+  if (mode === DISABLE_REASONING) return 0;
+  return NATIVE_REASONING_HEADROOM_TOKENS;
+}
+
+/**
+ * Output tokens estimated per report word when sizing maxTokens. 2.2 for English is
+ * deliberately generous (real English prose runs ~1.4), and that surplus is the slack
+ * that absorbs an overweight plan or a verbose disclaimer. Indonesian tokenizes denser
+ * per word, which used to be masked by the unconditional 24k native headroom; it gets a
+ * wider factor so the truncation margin on 'id' matches the English one.
+ */
+const TOKENS_PER_WORD: Record<ReportLanguage, number> = { en: 2.2, id: 2.6 };
 
 /* ------------------------------------------------------------------ *
  * Public shapes
@@ -180,6 +205,13 @@ export interface Assembly {
   systemPrompt: string;
   /** Empty string when `honestNull`: there is nothing to ask a model. */
   userPrompt: string;
+  /**
+   * The same user prompt with the planning pass stripped: the one-shot retry prompt for
+   * when the plan swallows the report. Null off the prompted-reasoning path (and FLAT).
+   */
+  userPromptNoPlan: string | null;
+  /** Exact canonical headings for this language; the prelude splitter keys on them. */
+  reportHeadings: string[];
   /** Completion cap sized to the render plan's word budget (05 §5.1). */
   maxTokens: number;
   /** Sum of the render plan's per-feature budgets. */
@@ -662,6 +694,8 @@ export function assemblePrompt(
       scenarios: [],
       systemPrompt: fullSystemPrompt(),
       userPrompt: '',
+      userPromptNoPlan: null,
+      reportHeadings: [...headingsFor(language)],
       maxTokens: 0,
       budgetWords: 0,
       minWords: 0,
@@ -780,6 +814,21 @@ export function assemblePrompt(
   // A STAIRCASE profile resolves almost nothing: no minimum, because padding it would lie.
   const minWords = signature.regime === 'NORMAL' ? MIN_REPORT_WORDS : 0;
 
+  // Prompted reasoning (the default): the prompt scripts a planning pass, and the no-plan
+  // variant is assembled alongside it as the one-shot retry prompt. Native/none paths get
+  // the plain prompt only — a plan instruction next to native thinking would double the
+  // reasoning.
+  const prompted = activeReasoningMode() === PROMPTED_REASONING;
+  const promptInput = {
+    signature,
+    scenarios,
+    renderPlan,
+    fragments,
+    budgetWords,
+    minWords,
+    language,
+  };
+
   return {
     regime: signature.regime,
     language,
@@ -791,22 +840,17 @@ export function assemblePrompt(
     renderPlan,
     scenarios,
     systemPrompt: fullSystemPrompt(),
-    userPrompt: buildUserPrompt({
-      signature,
-      scenarios,
-      renderPlan,
-      fragments,
-      budgetWords,
-      minWords,
-      language,
-    }),
-    // Output budget (~2.2 tokens/word + slack) PLUS a reasoning allowance: thinking is on
-    // by default and its tokens are billed against the same max_tokens, so a cap sized for
-    // the prose alone would let the reasoning pass starve the report and truncate it. The
-    // reasoning headroom is added on top, still clamped to MAX_COMPLETION_TOKENS.
+    userPrompt: buildUserPrompt({ ...promptInput, plan: prompted }),
+    userPromptNoPlan: prompted ? buildUserPrompt({ ...promptInput, plan: false }) : null,
+    reportHeadings: [...headingsFor(language)],
+    // Output budget (~2.2 tokens/word + slack) PLUS a reasoning allowance sized to the
+    // active mode (reasoning bills against the same max_tokens as the report): a wide one
+    // for native thinking, a small one for the capped prompted plan, none for `none`.
+    // Clamped to MAX_COMPLETION_TOKENS either way.
     maxTokens: Math.min(
       MAX_COMPLETION_TOKENS,
-      Math.max(3000, Math.round(budgetWords * 2.2) + 800) + REASONING_HEADROOM_TOKENS,
+      Math.max(3000, Math.round(budgetWords * TOKENS_PER_WORD[language]) + 800) +
+        reasoningHeadroomTokens(),
     ),
     budgetWords,
     minWords,
@@ -1563,7 +1607,83 @@ interface UserPromptInput {
   budgetWords: number;
   minWords: number;
   language: ReportLanguage;
+  /** True on the prompted-reasoning path: include the planning-pass instructions. */
+  plan: boolean;
 }
+
+/**
+ * The prompted-reasoning planning pass (spec:
+ * docs/superpowers/specs/2026-08-27-prompted-reasoning-design.md). Native thinking is off
+ * on that path, so the model reasons HERE instead — in the content stream, before the
+ * first heading, where the prelude splitter re-tags it as thinking for the murmur panel
+ * and strips it from the report. This block is the steering wheel: the stages say WHAT to
+ * reason about and HOW, the budget line says HOW MUCH, stage 6 says how to conclude.
+ *
+ * The stages are the knowledge base's own quality machinery turned into a thinking
+ * procedure (05 §5.4 gates, §5.5 forks, 03 §0 rule of composition, the inventiveness
+ * license): scan the evidence, read each feature, HUNT compositions by generating and
+ * discarding candidates, sketch the scenario if-thens, then attack the plan the way the
+ * audit will, before a single report sentence exists. Stages 3 and 5 are where the extra
+ * budget goes — they are what buys accuracy and originality.
+ *
+ * Two lines are load-bearing for the machinery, not just quality: "no line starting with
+ * '#'" keeps the plan from faking the boundary heading the splitter keys on, and the
+ * plan-in-English line keeps Indonesian out of everything but the report itself (the
+ * zero-contamination rule in prompt/language.ts).
+ */
+const PLANNING_PASS_INSTRUCTIONS: readonly string[] = [
+  '**PLANNING PASS (write this FIRST, before the first heading).** Begin your output with ' +
+    'a planning pass: private working notes, not report prose. Everything before the ' +
+    'first heading is stripped from the report and shown only as raw scratch work, so the ' +
+    'reader never receives it as report text. This is where your thinking happens — do it ' +
+    'on the page, in six stages, numbered:',
+  '1. EVIDENCE SCAN. Read the whole signature before interpreting any of it. List the ' +
+    'three or four strongest geometric facts in salience order, every marginal detection ' +
+    '(these MUST become forks, decide that now), and what did NOT fire — a quiet axis, an ' +
+    'absent circuit, an empty eruption list. What is absent constrains what you may say ' +
+    'as hard as what is present. Note the regime: a profile that resolves little licenses ' +
+    'a short plan and a short report — never manufacture depth the geometry does not carry.',
+  '2. FEATURE READINGS. For each feature in the render plan, one compact line: the ' +
+    'everyday words you will use for its habits; the mechanism it reads (name it); both ' +
+    'sides of its trade-off; and the boldest defensible prediction the fragments do NOT ' +
+    'already state, with the observation that would kill it. Specific-and-checkable beats ' +
+    'vague-and-safe every time — a reader can test a sharp guess, not a mushy one.',
+  '3. COMPOSITION HUNT. This is the core of the plan. Generate four to six candidate ' +
+    'combinations of the fired features (pairs and triples). For each candidate, ask: ' +
+    'what does this combination predict that no single feature predicts alone — about how ' +
+    'this person argues, decides, procrastinates, burns out, recovers, repairs a mistake? ' +
+    'Write the candidate down even if you then reject it. Keep the two or three whose ' +
+    'predictions are most specific and most surprising while still running through named ' +
+    'mechanisms; explicitly discard the generic ones and say why. No fragment states these ' +
+    "interactions; deriving them is the report's most valuable content. When the render " +
+    'plan lists fewer than three features, skip the hunt: note what the sparse geometry ' +
+    'licenses and move on — the instructions in the plan outrank this stage.',
+  '4. SCENARIO SKETCHES (skip this stage entirely when no scenarios are listed). One line ' +
+    'each: the demanded habit and how its supply grade will FEEL in the scene; the ' +
+    'sharpest if-then signature you can draft for it; the workaround this profile would ' +
+    'reach for instead (substituting a stronger habit); and what that workaround costs or ' +
+    'bills later.',
+  '5. ADVERSARIAL PASS. Attack your own plan the way the audit will. For each planned ' +
+    'claim: would the OPPOSITE profile (lead and floor swapped) accept it as accurate? ' +
+    'Then it says nothing — sharpen it until it discriminates, or drop it. Which credited ' +
+    'strength still lacks a cost tied to the SAME feature? Which section still lacks its ' +
+    'falsifiable prediction with a counter-observation? Is any tie about to be ranked, ' +
+    'any marginal feature about to be stated one-sidedly, any grade word, number, or ' +
+    'two-letter code about to leak into report prose? Fix each problem here, in the plan, ' +
+    'where it is one line — not in the report, where it is a rewrite.',
+  '6. ARC AND CLOSE. State the through-line in one sentence: the one thing this ' +
+    'signature is about, which every section should serve. Then: which composition anchors ' +
+    'section 2; which experiment in section 5 tests which named hypothesis from sections ' +
+    '2-4 (every lever must trace back to one); and how section 7 names the limits without ' +
+    'taking back what the report actually said.',
+  'Plan budget: 500-900 words, never more than 1200. Spend the depth on stages 3 and 5. ' +
+    'Plain prose lines and list numbers only: no markdown headings, no line starting with ' +
+    '"#". Codes, grades, internal terms and figures ARE allowed in the plan (it is private ' +
+    'and is not the report). Write the plan in English whatever language the report is ' +
+    'written in.',
+  'Then write the report, starting directly at the first canonical heading. The report ' +
+    'must stand alone: never refer to the plan, never write "as planned" or "as noted above".',
+];
 
 const GROUP_TITLES: Record<SelectedFragment['group'], string> = {
   shapes: 'Shapes (02 §4 hypotheses, detection and grades stripped; grades come from the Signature above)',
@@ -1575,7 +1695,7 @@ const GROUP_TITLES: Record<SelectedFragment['group'], string> = {
 
 function buildUserPrompt(input: UserPromptInput): string {
   const { signature, scenarios, renderPlan, fragments } = input;
-  const { budgetWords, minWords, language } = input;
+  const { budgetWords, minWords, language, plan } = input;
   const out: string[] = [];
 
   out.push('# 1. STACK SIGNATURE (computed, authoritative)');
@@ -1712,10 +1832,15 @@ function buildUserPrompt(input: UserPromptInput): string {
   out.push('');
   for (const line of languageDirective(language)) out.push(line);
   out.push('');
+  if (plan) {
+    for (const line of PLANNING_PASS_INSTRUCTIONS) out.push(line);
+    out.push('');
+  }
   out.push(
     'Write Sections 2–7 ONLY. Section 1 is rendered client-side from the Signature above; ' +
       'do not restate it. Use EXACTLY these markdown headings, in this order, with nothing ' +
-      'before the first one (the client matches these strings to render its cards):',
+      (plan ? 'before the first one except the planning pass described above ' : 'before the first one ') +
+      '(the client matches these strings to render its cards):',
   );
   out.push('');
   for (const heading of headingsFor(language)) out.push(`- \`${heading}\``);
