@@ -148,6 +148,29 @@ describe('the disclaimer, per language', () => {
     expect(DISCLAIMER_ID).not.toContain('What this is');
   });
 
+  it('keeps the English markers exact substrings of the kb block too', () => {
+    // Same contract as the Indonesian anchors above; a case drift here silently
+    // exempts post-disclaimer text from the audit (that bug shipped once).
+    expect(getDisclaimer()).toContain('What this is and is not.');
+    expect(getDisclaimer().endsWith('A qualified professional can.')).toBe(true);
+  });
+
+  it('still audits text the model writes AFTER the disclaimer, in both languages', () => {
+    const enReport = `Clean body.\n\n> ${getDisclaimer()}\n\nYou are an INTJ.`;
+    expect(auditReport(enReport).join(' ')).toContain('INTJ');
+    const idReport = `Isi bersih.\n\n> ${DISCLAIMER_ID}\n\nKamu itu INTJ.`;
+    expect(auditReport(idReport, 'id').join(' ')).toContain('INTJ');
+  });
+
+  it('reports one violation per word even when both rule sets match it', () => {
+    // "diagnosis" trips the English AND the Indonesian clinical rule on the
+    // 'id' path; the reader must not see the identical message twice.
+    const report = `Ini bukan sebuah diagnosis medis.\n\n> ${DISCLAIMER_ID}`;
+    const violations = auditReport(report, 'id');
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain('diagnosis');
+  });
+
   it('recognizes only its own language\'s block', () => {
     expect(hasDisclaimer(`> ${getDisclaimer()}`)).toBe(true);
     expect(hasDisclaimer(`> ${DISCLAIMER_ID}`, 'id')).toBe(true);

@@ -24,15 +24,16 @@ import {
 const base = { model: 'deepseek-v4-flash', system: 'sys', user: 'usr' };
 
 describe('reasoning effort', () => {
-  it('defaults to bounded minimal thinking (unbounded was too slow)', () => {
-    // Thinking ON but short. Unset/blank => 'minimal'. `default` still means unbounded (null)
-    // for anyone who explicitly opts back into it.
-    expect(DEFAULT_REASONING_EFFORT).toBe('minimal');
-    expect(resolveReasoningEffort(undefined)).toBe('minimal');
-    expect(resolveReasoningEffort('')).toBe('minimal');
-    expect(resolveReasoningEffort('   ')).toBe('minimal');
-    expect(resolveReasoningEffort(null)).toBe('minimal');
-    expect(resolveReasoningEffort('default')).toBeNull(); // explicit opt-in to unbounded
+  it('defaults to low, the shortest effort DeepSeek documents', () => {
+    // Thinking ON but short. DeepSeek's thinking_mode guide accepts exactly low/high/max;
+    // the old default 'minimal' is not one of them and was SILENTLY ignored upstream
+    // ("will not trigger an error but will also have no effect"), so every request ran at
+    // the server default (high). 'low' is the real shortest level.
+    expect(DEFAULT_REASONING_EFFORT).toBe('low');
+    expect(resolveReasoningEffort(undefined)).toBe('low');
+    expect(resolveReasoningEffort('')).toBe('low');
+    expect(resolveReasoningEffort('   ')).toBe('low');
+    expect(resolveReasoningEffort(null)).toBe('low');
   });
 
   it('omits the parameter entirely for the literal "default"', () => {
@@ -41,28 +42,48 @@ describe('reasoning effort', () => {
     expect(resolveReasoningEffort(' default ')).toBeNull();
   });
 
-  it('passes recognized settings through', () => {
-    for (const effort of ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+  it('passes DeepSeek-documented values through untouched', () => {
+    for (const effort of ['none', 'low', 'high', 'max']) {
       expect(resolveReasoningEffort(effort)).toBe(effort);
     }
   });
 
-  it('falls back to the default (minimal) on an unrecognized value', () => {
+  it('maps compatibility aliases onto documented levels instead of forwarding them', () => {
+    // DeepSeek ignores unknown effort values without erroring, so forwarding these would
+    // silently run at the server default (high) — the "env var does nothing" defect.
+    expect(resolveReasoningEffort('minimal')).toBe('low'); // this app's pre-fix default
+    expect(resolveReasoningEffort('medium')).toBe('high'); // DeepSeek's own compat table
+    expect(resolveReasoningEffort('xhigh')).toBe('high'); // ditto
+  });
+
+  it('falls back to the default (low) on an unrecognized value', () => {
     // A typo falls back to the bounded default; to turn thinking OFF an operator must set
     // the explicit, recognized value `none`.
-    expect(resolveReasoningEffort('nono')).toBe('minimal');
-    expect(resolveReasoningEffort('true')).toBe('minimal');
+    expect(resolveReasoningEffort('nono')).toBe('low');
+    expect(resolveReasoningEffort('true')).toBe('low');
+    expect(resolveReasoningEffort('extrahigh')).toBe('low');
     expect(resolveReasoningEffort('none')).toBe('none');
+  });
+
+  it('never resolves to a value DeepSeek does not document', () => {
+    // The wire contract: whatever reaches reasoning_effort must be low/high/max, or the
+    // 'none'/null sentinels handled by buildChatRequest. Anything else is silently
+    // dropped upstream and the knob stops working.
+    const inputs = ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'default', 'typo'];
+    for (const input of inputs) {
+      const resolved = resolveReasoningEffort(input);
+      expect([null, 'none', 'low', 'high', 'max']).toContain(resolved);
+    }
   });
 });
 
 describe('buildChatRequest', () => {
-  it('enables bounded (minimal) thinking by default: thinking on, short effort', () => {
+  it('enables bounded (low) thinking by default: thinking on, short effort', () => {
     const request = buildChatRequest(base) as Record<string, unknown>;
     // The documented on/off switch is `thinking`, ON by default...
     expect(request.thinking).toEqual({ type: 'enabled' });
     // ...with an explicit short cap so the model keeps its reasoning brief.
-    expect(request.reasoning_effort).toBe('minimal');
+    expect(request.reasoning_effort).toBe('low');
     expect(request.stream).toBe(true);
     expect(request.temperature).toBe(TEMPERATURE);
     expect(request.max_tokens).toBe(MAX_COMPLETION_TOKENS);
@@ -82,12 +103,24 @@ describe('buildChatRequest', () => {
   it('honours an explicit override and an explicit token cap', () => {
     const request = buildChatRequest({
       ...base,
-      reasoningEffort: 'medium',
+      reasoningEffort: 'max',
       maxTokens: 4200,
     }) as Record<string, unknown>;
     expect(request.thinking).toEqual({ type: 'enabled' });
-    expect(request.reasoning_effort).toBe('medium');
+    expect(request.reasoning_effort).toBe('max');
     expect(request.max_tokens).toBe(4200);
+  });
+
+  it('sends only DeepSeek-documented values on the wire, whatever the env says', () => {
+    // Regression for the silent no-op: 'minimal' (the old default) reached the wire and
+    // DeepSeek ignored it, so every report ran at the server default effort (high).
+    for (const envValue of ['minimal', 'medium', 'xhigh', 'extrahigh', '', 'low', 'high', 'max']) {
+      const request = buildChatRequest({ ...base, reasoningEffort: envValue }) as Record<
+        string,
+        unknown
+      >;
+      expect(['low', 'high', 'max']).toContain(request.reasoning_effort);
+    }
   });
 
   it('turns thinking OFF for the explicit "none" value', () => {

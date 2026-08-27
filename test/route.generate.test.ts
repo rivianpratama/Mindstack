@@ -175,14 +175,45 @@ describe('POST /api/generate — thinking + content streaming', () => {
 
 describe('POST /api/generate — report language', () => {
   it('rejects an unknown language with a 400 instead of writing the wrong one', async () => {
-    const res = await generateRoute.request('/generate', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ scores: PROFILE_A, language: 'fr' }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain('"language"');
+    // Strictness is per-value: unknown strings, wrong types and the wrong case
+    // are all 400s, because silently writing the wrong language would be worse.
+    for (const language of ['fr', 'ID', 'EN', 5, true, {}, ['id']]) {
+      const res = await generateRoute.request('/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scores: PROFILE_A, language }),
+      });
+      expect(res.status, `language ${JSON.stringify(language)} must be a 400`).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain('"language"');
+    }
+  });
+
+  it('treats an explicit null like an absent field: English', async () => {
+    control.items = [
+      { kind: 'content', text: withDisclaimer('## How your processing runs\n\nWorth testing.') },
+    ];
+    const frames = await post(PROFILE_A, { language: null });
+    expect(frames.map((f) => f.event).at(-1)).toBe('done');
+    expect(JSON.parse(frames.find((f) => f.event === 'audit')!.data)).toEqual({ violations: [] });
+  });
+
+  it('serves the FLAT honest-null in Indonesian, audited with the Indonesian rules', async () => {
+    // Deterministic path, no model: the report, its disclaimer and its audit
+    // must all ride the requested language end to end.
+    const flat = { Ti: 27, Se: 26, Ni: 25, Te: 25, Ne: 24, Fi: 24, Si: 23, Fe: 23 };
+    const frames = await post(flat, { language: 'id' });
+    expect(JSON.parse(frames[0]!.data)).toEqual({ regime: 'FLAT', llm: false });
+    const chunkText = frames
+      .filter((f) => f.event === 'chunk')
+      .map((f) => JSON.parse(f.data).text as string)
+      .join('');
+    expect(chunkText).toContain('## Dari mana laporan ini berasal');
+    expect(chunkText).toContain('Apa ini dan apa yang bukan.');
+    expect(chunkText).not.toContain('What this is and is not.');
+    // The block's own "diagnosis" must not self-flag: the strip works end to end.
+    expect(JSON.parse(frames.find((f) => f.event === 'audit')!.data)).toEqual({ violations: [] });
+    expect(frames.map((f) => f.event).at(-1)).toBe('done');
   });
 
   it('accepts an explicit "en" and behaves exactly like the default', async () => {

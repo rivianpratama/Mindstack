@@ -91,7 +91,7 @@ export function disclaimerFor(language: ReportLanguage): string {
 
 /** Rule 0.5's habit table, in everyday Indonesian. Handed to the model per request. */
 const PLAIN_HABITS_ID: Readonly<Record<FunctionKey, string>> = {
-  Ni: 'firasat halus tentang ke mana segala sesuatu mengarah; membaca arah jangka panjang',
+  Ni: 'firasat halus tentang ke mana segala sesuatu mengarah; membaca arah jangka panjang. Perkiraan yang masuk akal, bukan hal gaib',
   Ne: 'mengejar ide baru dan kemungkinan "bagaimana kalau"; melihat banyak kemungkinan',
   Si: 'bersandar pada apa yang sudah pernah berhasil; ingatan tentang cara yang biasa; rutinitas yang mantap',
   Se: 'menangkap dan bertindak pada apa yang ada tepat di depan mata; hidup di saat ini; langsung turun tangan',
@@ -124,7 +124,13 @@ export function languageDirective(language: ReportLanguage): string[] {
       'per sentence, one idea per sentence, everyday words a junior-high reader understands ' +
       'on the first read. No English loanword where a plain Indonesian word exists. No ' +
       'academic Indonesian, no psychology terms, no em-dashes, no "bukan X, melainkan Y" ' +
-      'frames, and never a number, grade, or two-letter code about the person.',
+      'frames, and never a number, grade, or two-letter code about the person. The one place ' +
+      'numbers are allowed (section 6, method facts only) uses Indonesian number formatting: ' +
+      'a period for thousands, as in "hanya 16 dari 40.320 urutan yang mungkin".',
+    'The confidence-audibility bans carry over: a community idea or guess never contains ' +
+      '"penelitian", "sains", "bukti", "terbukti", or "tervalidasi" in the affirmative ' +
+      '(negations like "belum pernah diuji oleh sains" are required, not banned). Never ' +
+      'write "jelas", "tidak diragukan", or "ini berarti" about the person.',
     'Plain everyday Indonesian words for the eight habits (adapt to the sentence, never as a ' +
       'fixed label): ' +
       (Object.keys(PLAIN_HABITS_ID) as FunctionKey[])
@@ -137,10 +143,13 @@ export function languageDirective(language: ReportLanguage): string[] {
       'membicarakan hal ini di latar yang berbeda. Kami menebak ini mungkin cocok juga ' +
       'untukmu. Coba dan lihat sendiri."; our guess = "Ini sesuatu yang kami duga mungkin ' +
       'benar untukmu. Lihat apakah cocok dengan hidupmu." The first use of a community idea ' +
-      'includes "belum teruji" or "belum tervalidasi".',
+      'includes "belum teruji" or "belum pernah dibuktikan".',
     'The if-then template in Indonesian: "Saat [situasi sehari-hari], kamu mungkin [prediksi ' +
       'yang bisa diamati]; tapi kalau kamu melihat [pengamatan sebaliknya], itu memberi tahu ' +
       'kami [bagian tebakan ini yang perlu diperbaiki]." All three parts stay required.',
+    'Gate C1\'s fixed falsifier format in Indonesian, labels included: "Prediksi: ... ' +
+      'Pengamatan tandingan: kalau kamu melihat bahwa ..., tebakan ini salah. Buang saja." ' +
+      'Never leave the labels in English.',
   ];
 }
 
@@ -154,22 +163,22 @@ export const FRAMEWORK_PROVENANCE_TEXT_ID = [
   '',
   'Sebagian besar idenya berasal dari tulisan komunitas kepribadian. Empat panduan di ' +
     'mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, ' +
-    'Type Spotting) dan ide "grip" dari Naomi Quenk. Para penulis ini layak mendapat ' +
-    'penghargaan. Tapi tidak satu pun dari ini pernah diuji oleh sains.',
+    'Type Spotting) dan ide "grip" dari Naomi Quenk. Para penulis ini layak dihargai. ' +
+    'Tapi tidak satu pun dari ini pernah diuji oleh sains.',
   '',
   'Sumber-sumber itu menggambarkan pola yang mereka sebut "loop" dan "grip". Pola ini ' +
     'tentang kebiasaan mental mana yang kamu pakai bersamaan, mana yang kamu hindari, dan ' +
     'mana yang muncul saat kamu lelah. Sumber aslinya mengikat pola-pola ini pada 16 tipe ' +
     'yang baku.',
   '',
-  'Kami melakukan hal yang berbeda. Kami menyimpan polanya tapi berhenti mengikatnya pada ' +
+  'Kami melakukan hal yang berbeda. Kami tetap memakai polanya tapi berhenti mengikatnya pada ' +
     'tipe baku. Sebagai gantinya, kami membacanya dari skor kuismu. Kami melihat jarak antar ' +
     'angkamu. Kami melakukan ini karena skor sungguhan hampir tidak pernah cocok dengan ' +
     'salah satu dari 16 urutan baku. Ada 40.320 urutan yang mungkin, dan hanya 16 yang ' +
     '"klasik". Perubahan ini adalah tebakan kami sendiri. Ini belum pernah diuji.',
   '',
   'Itu juga alasan kami tidak memberimu label tipe empat huruf. Delapan skor terpisah ' +
-    'memberi tahu kami lebih banyak daripada satu kotak dari 16. Penelitian yang terbit juga ' +
+    'memberi tahu kami lebih banyak daripada satu kotak dari 16. Penelitian yang diterbitkan juga ' +
     'menolak gagasan urutan yang baku (Reynierse, 2009). Label tipe akan menjadi klaim yang ' +
     'tidak bisa kami buktikan.',
   '',
@@ -182,8 +191,8 @@ export const FRAMEWORK_PROVENANCE_TEXT_ID = [
     'sungguhan. Setiap tebakan tentang kebiasaan mana yang cocok dengan situasi mana ' +
     'tetaplah tebakan kami.',
   '',
-  'Terakhir: delapan skormu berasal dari kuis hobi tanpa bukti terbit bahwa kuis itu ' +
-    'bekerja. Orang sering mendapat hasil yang berbeda saat mengulangnya.',
+  'Terakhir: delapan skormu berasal dari kuis hobi tanpa bukti yang diterbitkan bahwa kuis ' +
+    'itu bekerja. Orang sering mendapat hasil yang berbeda saat mengulangnya.',
 ].join('\n');
 
 /** Everyday Indonesian words for each habit, so the FLAT report names no bare codes. */

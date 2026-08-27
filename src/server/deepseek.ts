@@ -5,29 +5,31 @@
  * Model id, base URL and key all come from the environment (DeepSeek's model names
  * shift; hardcoding one would rot). Temperature is held at 0.5: high enough to keep the
  * prose from flattening into one voice across profiles, low enough to curb the flattery
- * drift documented for higher temperatures.
+ * drift documented for higher temperatures. Per the thinking_mode guide, temperature is a
+ * documented no-op while thinking is ON — it only shapes the `none` (thinking off) path.
  *
  * REASONING: deepseek-v4-flash is a hybrid reasoning model. It emits `reasoning_content`
  * (thinking) alongside `content` (the answer). Thinking is switched with the documented
- * `thinking: { type: 'enabled' | 'disabled' }` parameter and is ON and UNBOUNDED by default
- * (user requirement). `reasoning_content` is streamed to the reader as a separate `thinking`
- * SSE event (see routes/generate.ts), clearly labeled raw scratch work, and NEVER buffered,
- * audited, or given the disclaimer; only `content` is the report. Empty/truncated failure
- * modes are judged on content alone (see `classifyStreamOutcome`). Because thinking tokens
- * are billed against `max_tokens`, MAX_COMPLETION_TOKENS is set to the model ceiling and
- * TIMEOUT_MS is wide. Set DEEPSEEK_REASONING_EFFORT=none for a fast, cheap no-thinking pass.
+ * `thinking: { type: 'enabled' | 'disabled' }` parameter and is ON by default, bounded to
+ * the shortest documented effort (see DEFAULT_REASONING_EFFORT). `reasoning_content` is
+ * streamed to the reader as a separate `thinking` SSE event (see routes/generate.ts),
+ * clearly labeled raw scratch work, and NEVER buffered, audited, or given the disclaimer;
+ * only `content` is the report. Empty/truncated failure modes are judged on content alone
+ * (see `classifyStreamOutcome`). Because thinking tokens are billed against `max_tokens`,
+ * MAX_COMPLETION_TOKENS is set to the model ceiling and TIMEOUT_MS is wide. Set
+ * DEEPSEEK_REASONING_EFFORT=none for a fast, cheap no-thinking pass.
  */
 
 import OpenAI from 'openai';
-import type { ReasoningEffort } from 'openai/resources/shared';
 
 export const DEFAULT_MODEL = 'deepseek-v4-flash';
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 export const TEMPERATURE = 0.5;
-// Total wall-clock budget per attempt. Unbounded thinking is on by default, and on a large
-// prompt the model can think for minutes before it writes a single byte (nothing streams
-// during the thinking phase). 600s gives that room while still capping a genuinely hung
-// connection. Set DEEPSEEK_REASONING_EFFORT=none for the fast (~48s) no-thinking path.
+// Total wall-clock budget per attempt. Thinking is on by default, and at the deeper
+// efforts ('default'/'max') the model can think for minutes on a large prompt before it
+// writes a single byte (nothing streams during the thinking phase). 600s gives that room
+// while still capping a genuinely hung connection. Set DEEPSEEK_REASONING_EFFORT=none for
+// the fast (~48s) no-thinking path.
 export const TIMEOUT_MS = 600_000;
 // Pre-stream retries for transient failures (connection reset, 429, 5xx). Only ever
 // attempted before the first byte reaches the client, so a retry can never double a
@@ -47,34 +49,45 @@ const RETRY_BACKOFF_MS = [250, 750];
 // 16000 leaves comfortable headroom; the truncation guard catches the rare overrun.
 export const MAX_COMPLETION_TOKENS = 32000;
 
+/** The effort levels DeepSeek documents (thinking_mode guide). Nothing else exists. */
+export type DeepSeekReasoningEffort = 'low' | 'high' | 'max';
+
 /**
- * Thinking ON but BOUNDED by default. It was unbounded ("let the LLM judge itself"), but on
- * a 16k-token prompt the model deliberated for minutes, too slow in practice, so the
- * default is now the shortest effort, `minimal`: the thinking panel still shows real
- * reasoning, but the model is told to keep it brief. Per the DeepSeek docs, reasoning is
+ * Thinking ON but BOUNDED by default. Per the DeepSeek thinking_mode guide, reasoning is
  * switched with the dedicated `thinking: { type: 'enabled' | 'disabled' }` parameter (see
- * buildChatRequest); `reasoning_effort` is a SEPARATE cap sent alongside it.
+ * buildChatRequest); `reasoning_effort` is a SEPARATE cap sent alongside it, and its only
+ * documented values are `low` / `high` / `max`. An UNKNOWN value is silently ignored
+ * ("will not trigger an error but will also have no effect"), and the server default with
+ * thinking on is `high` — which is why the old default, OpenAI's `minimal`, never worked:
+ * every request quietly ran at `high`. Values are therefore MAPPED here (never forwarded
+ * raw), and the default is `low`, the shortest level DeepSeek actually has.
  *
- * Control with DEEPSEEK_REASONING_EFFORT (tune without a code change; restart to apply):
- *   `none`    → OFF, fastest (~48s), no thinking panel content;
- *   `minimal` → shortest thinking (the default);
- *   `low` / `medium` / `high` → progressively more (and slower);
- *   `default` → unbounded, the model decides (slowest; can take minutes).
+ * Control with DEEPSEEK_REASONING_EFFORT. NOTE: tsx watch does NOT reload .env — fully
+ * restart `npm run dev:server` after changing it, or the old value stays live.
+ *   `none`    → thinking OFF, fastest (~48s), no thinking panel content;
+ *   `low`     → shortest thinking (the default here);
+ *   `high`    → deeper (aliases: `medium`, `xhigh`, per DeepSeek's own compat table);
+ *   `max`     → deepest, slowest (can take minutes on a 16k prompt);
+ *   `default` → send no cap; DeepSeek's server-side default applies (currently `high`).
  */
-export const DEFAULT_REASONING_EFFORT: ReasoningEffort | null = 'minimal';
+export const DEFAULT_REASONING_EFFORT: DeepSeekReasoningEffort = 'low';
 
 /** The sentinel that means "send no reasoning_effort at all". */
 export const OMIT_REASONING_EFFORT = 'default';
 
-const REASONING_EFFORTS: readonly string[] = [
-  'none',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-];
+/** The sentinel that turns thinking OFF (via the `thinking` switch, not an effort). */
+export const DISABLE_REASONING = 'none';
+
+// Every accepted spelling, mapped onto a documented level. Forwarding an unmapped value
+// would be a silent no-op upstream (the "env var does nothing" defect).
+const EFFORT_ALIASES: Record<string, DeepSeekReasoningEffort> = {
+  low: 'low',
+  high: 'high',
+  max: 'max',
+  minimal: 'low', // this app's pre-fix default; OpenAI vocabulary, unknown to DeepSeek
+  medium: 'high', // DeepSeek's compat table maps medium → high
+  xhigh: 'high', // ditto
+};
 
 export interface DeepSeekConfig {
   apiKey: string;
@@ -162,17 +175,20 @@ export interface StreamReportItem {
 
 /**
  * Resolve the reasoning setting from the environment. Returns null when the parameter must
- * be omitted entirely, so the model applies its own default.
+ * be omitted entirely, so DeepSeek's own default (`high`) applies.
  *
- * An unrecognized value falls back to the default rather than being forwarded: a typo in a
- * deploy variable should not turn thinking back on and empty the report again.
+ * An unrecognized value falls back to the default rather than being forwarded: DeepSeek
+ * ignores unknown values without erroring, so a typo in a deploy variable would otherwise
+ * silently run every report at the server default.
  */
-export function resolveReasoningEffort(raw?: string | null): ReasoningEffort | null {
+export function resolveReasoningEffort(
+  raw?: string | null,
+): DeepSeekReasoningEffort | typeof DISABLE_REASONING | null {
   const value = (raw ?? '').trim();
-  if (value === '') return DEFAULT_REASONING_EFFORT; // unset → unbounded thinking (null)
-  if (value === OMIT_REASONING_EFFORT) return null; // 'default' → unbounded thinking
-  if (REASONING_EFFORTS.includes(value)) return value as ReasoningEffort; // 'none' = off; level = capped
-  return DEFAULT_REASONING_EFFORT; // typo → the default (unbounded), never a surprise cap
+  if (value === '') return DEFAULT_REASONING_EFFORT; // unset → the bounded default (low)
+  if (value === OMIT_REASONING_EFFORT) return null; // 'default' → omit; server default (high)
+  if (value === DISABLE_REASONING) return DISABLE_REASONING; // 'none' → thinking off
+  return EFFORT_ALIASES[value] ?? DEFAULT_REASONING_EFFORT; // level or alias; typo → default
 }
 
 export interface ChatRequestInput {
@@ -190,8 +206,8 @@ export interface ChatRequestInput {
 export function buildChatRequest(input: ChatRequestInput) {
   const effort = resolveReasoningEffort(input.reasoningEffort);
   // 'none' is the one value that turns thinking OFF; everything else (a level, or null for
-  // unbounded) turns it ON via the documented `thinking` switch.
-  const thinkingOn = effort !== 'none';
+  // the server default) turns it ON via the documented `thinking` switch.
+  const thinkingOn = effort !== DISABLE_REASONING;
   return {
     model: input.model,
     temperature: TEMPERATURE,

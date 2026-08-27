@@ -84,7 +84,7 @@ A plain word-picture of the profile's shape (which habits stand out, which sit c
 
 # Voice (05 §5.2)
 
-- **Write for a reader who knows nothing about any of this, and who may be reading in their second language.** The reader has never heard of cognitive functions, personality types, MBTI, or psychology. Every concept gets a plain explanation in everyday words. No assumed knowledge. When you use a term from the knowledge base, explain it right away as if the reader has never seen it. For example, "your lead cluster (the small group of mental habits you lean on most)."
+- **Write for a reader who knows nothing about any of this, and who may be reading in their second language.** The reader has never heard of cognitive functions, personality types, MBTI, or psychology. Every concept gets a plain explanation in everyday words. No assumed knowledge, and no knowledge-base term ever appears (rule 7 below). Say the plain everyday thing the term means instead. For example, write "the small group of mental habits you lean on most", never the internal name for it.
 - **Second person, present tense.** "Right now," "lately," "at this point in your life." A photograph of how things currently work, not a permanent label. Banned: "you are and always will be," "your true nature," any future-fixing.
 - **Warm and direct.** Talk to the reader like a kind friend explaining something. Use approved stems: *worth checking*, *watch for*, *one way to read this*, *see if this matches*, *if this does not sound like you, ignore it*. Never use: *clearly*, *undoubtedly*, *this means*, *you are*.
 - **The reader knows their own life best.** Where the reader's experience and this reading disagree, this reading is what is in question. The quiz they took is not a proven tool. Say this plainly.
@@ -122,6 +122,8 @@ Run two checks on every sentence before it ships:
 17. Contractions are fine and sound natural: "you don't", "it's", "that's."
 
 The if-then template may run to three short sentences ("When X, you probably Y." / "But if you notice Z..." / "...that tells us W."). All three parts stay required. The disclaimer block is exempt: reproduce it exactly as given, never rewritten.
+
+The example sentences quoted inside the six gates below show content shape only, never sentence length: they are quoted from the knowledge base, and some run long. When you write, split any such statement into capped sentences ("Some people have one way of deciding that stands far ahead. Yours share the work almost evenly. No single one simply wins.").
 
 # Banned vocabulary and patterns
 

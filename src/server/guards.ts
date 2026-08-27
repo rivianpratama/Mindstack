@@ -69,17 +69,20 @@ const RULES_EN: readonly AuditRule[] = [
 const RULES_ID: readonly AuditRule[] = [
   {
     id: 'clinical-id',
-    pattern: /\bgangguan (?:jiwa|mental|kepribadian)\b|\brespons trauma\b|\bdepresif?\b|\bnarsisistik\b|\bdidiagnosis\b|\bdiagnosa\b/gi,
+    // (?:men|di)? covers the standard verb prefixes (mendiagnosis, didiagnosa, …);
+    // narsis(?:is)?tik covers both the KBBI and the everyday spelling.
+    pattern: /\bgangguan (?:jiwa|mental|kepribadian)\b|\brespons trauma\b|\bdepresif?\b|\bnarsis(?:is)?tik\b|\b(?:men|di)?diagnos(?:is|a)\b/gi,
     describe: (m) => `prohibited output 3 (clinical vocabulary): "${m}"`,
   },
   {
     id: 'essentialist-id',
-    pattern: /\bkamu akan selalu\b|\bkamu tidak akan pernah\b|\bdirimu yang sejati\b|\bsifat aslimu\b|\bjati dirimu yang sebenarnya\b/gi,
+    pattern: /\bkamu akan selalu\b|\bkamu tidak akan pernah\b|\bdirimu yang se(?:benarnya|jati)\b|\bsifat aslimu\b|\bjati dirimu\b/gi,
     describe: (m) => `prohibited output 4 (essentialist framing): "${m}"`,
   },
   {
     id: 'rarity-id',
-    pattern: /\d+\s*% dari (?:orang|profil|populasi)|\bpersentil\b/gi,
+    // "dari" is optional in Indonesian percentage-of-people claims ("10% orang").
+    pattern: /\d+\s*% (?:dari )?(?:orang|profil|populasi)|\bpersentil\b/gi,
     describe: (m) => `prohibited output 5 / gate C6 (no norms): "${m}" is a rarity or percentile claim`,
   },
 ];
@@ -93,7 +96,7 @@ function rulesFor(language: ReportLanguage): readonly AuditRule[] {
  * They are the block's own first and last sentences; keep in step with the text.
  */
 const DISCLAIMER_MARKERS: Readonly<Record<ReportLanguage, { start: string; end: string }>> = {
-  en: { start: 'What this is and is not.', end: 'a qualified professional can.' },
+  en: { start: 'What this is and is not.', end: 'A qualified professional can.' },
   id: { start: 'Apa ini dan apa yang bukan.', end: 'yang berkualifikasi bisa.' },
 };
 
@@ -151,14 +154,16 @@ export function auditReport(
   const violations: string[] = [];
   const body = stripDisclaimer(text, language);
 
+  // Deduplicated by the final message: on the 'id' path the English and
+  // Indonesian rule sets can both match the same word ("diagnosis"), and the
+  // reader must not see the identical violation twice.
+  const emitted = new Set<string>();
   for (const rule of rulesFor(language)) {
-    const seen = new Set<string>();
     for (const match of body.matchAll(rule.pattern)) {
-      const hit = match[0];
-      const key = `${rule.id}:${hit.toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      violations.push(rule.describe(hit));
+      const message = rule.describe(match[0]);
+      if (emitted.has(message.toLowerCase())) continue;
+      emitted.add(message.toLowerCase());
+      violations.push(message);
     }
   }
 
