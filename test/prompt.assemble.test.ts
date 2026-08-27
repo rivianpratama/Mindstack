@@ -586,7 +586,7 @@ describe('prompted reasoning (the default): plan scripted in the prompt', () => 
     expect(prompted.userPromptNoPlan).not.toBeNull();
     const noPlan = prompted.userPromptNoPlan!;
     expect(noPlan).not.toContain('PLANNING PASS');
-    expect(noPlan).toContain('with nothing before the first one (');
+    expect(noPlan).toContain('with nothing before the first one except the single headline line (');
     // Same evidence, same plan, same fragments: only the render instruction differs.
     const upTo = (text: string) => text.slice(0, text.indexOf('# 5. RENDER INSTRUCTION'));
     expect(upTo(noPlan)).toBe(upTo(prompted.userPrompt));
@@ -599,11 +599,12 @@ describe('prompted reasoning (the default): plan scripted in the prompt', () => 
     expect(noPlan).toContain(`Total allocated budget: ~${prompted.budgetWords} words`);
   });
 
-  it('exposes the canonical headings for the prelude splitter, per language', () => {
-    expect(assembleWith(undefined).reportHeadings).toEqual([...REPORT_HEADINGS]);
+  it('exposes the headline prefix plus the canonical headings for the prelude splitter, per language', () => {
+    expect(assembleWith(undefined).reportHeadings).toEqual(['# ', ...REPORT_HEADINGS]);
     const id = assemblePrompt(sigA, null, 'id');
-    expect(id.reportHeadings[0]).toBe('## Cara pikiranmu biasanya bekerja');
-    expect(id.reportHeadings).toHaveLength(6);
+    expect(id.reportHeadings[0]).toBe('# ');
+    expect(id.reportHeadings[1]).toBe('## Cara pikiranmu biasanya bekerja');
+    expect(id.reportHeadings).toHaveLength(7);
   });
 
   it('sizes the headroom to the mode: native wide, prompted small, none nothing', () => {
@@ -841,5 +842,62 @@ describe('system prompt — rule hierarchy', () => {
     expect(SYSTEM_PROMPT).toContain('Type Spotting');
     expect(SYSTEM_PROMPT).toContain('40,320');
     expect(SYSTEM_PROMPT).toContain('Reynierse 2009');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The report headline and the near-flat length waiver
+ * ------------------------------------------------------------------ */
+
+describe('report headline instruction', () => {
+  it('asks for the single `# <headline>` line on every LLM path', () => {
+    for (const assembly of [assemblyA, assemblyB, assemblyMixed]) {
+      expect(assembly.userPrompt).toContain('`# <headline>`');
+      expect(assembly.userPrompt).toContain('front-page newspaper headline');
+    }
+    const id = assemblePrompt(sigA, null, 'id');
+    expect(id.userPrompt).toContain('`# <headline>`');
+    expect(id.userPrompt).toContain("written in the report's language");
+  });
+
+  it('asks for it in the no-plan retry prompt too', () => {
+    const prior = process.env.DEEPSEEK_REASONING_EFFORT;
+    delete process.env.DEEPSEEK_REASONING_EFFORT;
+    try {
+      const prompted = assemblePrompt(sigA, null);
+      expect(prompted.userPromptNoPlan).toContain('`# <headline>`');
+    } finally {
+      if (prior !== undefined) process.env.DEEPSEEK_REASONING_EFFORT = prior;
+    }
+  });
+});
+
+describe('NEAR-FLAT (low differentiation) waives the NORMAL length minimum', () => {
+  // Spread 8 with one 6-point cut: NORMAL regime, differentiation 'low'.
+  const nearFlat = computeSignature({
+    Ni: 30,
+    Ne: 30,
+    Ti: 29,
+    Te: 29,
+    Fe: 23,
+    Si: 23,
+    Se: 22,
+    Fi: 22,
+  });
+  const assembly = assemblePrompt(nearFlat, null);
+
+  it('still assembles a real LLM report', () => {
+    expect(nearFlat.regime).toBe('NORMAL');
+    expect(assembly.llm).toBe(true);
+    expect(assembly.honestNull).toBe(false);
+  });
+
+  it('sets no hard minimum and says so in the prompt', () => {
+    expect(assembly.minWords).toBe(0);
+    expect(assembly.userPrompt).toContain('No length minimum applies');
+  });
+
+  it('ships the NEAR-FLAT measurement warning to the model', () => {
+    expect(assembly.userPrompt).toContain('NEAR-FLAT');
   });
 });

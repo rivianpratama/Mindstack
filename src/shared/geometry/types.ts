@@ -148,8 +148,10 @@ export interface Thresholds {
   leaning: number;
   /** Axis polarization: polarized up to 4B; extreme above. */
   polarized: number;
-  /** Differentiation: low at or below 2B (the FLAT regime). */
+  /** Spread at or below this is the FLAT regime: the whole profile fits inside one noise band (02 §2 step 0). */
   flatSpread: number;
+  /** Differentiation: low at or below 2B — the NEAR-FLAT low-confidence zone above flatSpread. */
+  lowSpread: number;
   /** Differentiation: moderate at or below 4B; high above. */
   moderateSpread: number;
   /** Circuit strength must exceed this to fire (02 §4 S12). */
@@ -180,7 +182,11 @@ export function deriveThresholds(options: ResolvedGeometryOptions): Thresholds {
     balanced: B,
     leaning: 2 * B,
     polarized: 4 * B,
-    flatSpread: 2 * B,
+    // FLAT only when differences the noise band could fully erase are all there is.
+    // The former 2B gate was relaxed (02 §2 step 0): spreads in (B, 2B] now generate,
+    // carrying the NEAR-FLAT low-confidence warning instead of the honest null.
+    flatSpread: B,
+    lowSpread: 2 * B,
     moderateSpread: 4 * B,
     circuit: B,
     sealedCircuit: 2 * B,

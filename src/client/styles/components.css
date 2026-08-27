@@ -859,6 +859,20 @@
   color: var(--muted-foreground);
 }
 
+/*
+ * The model-authored profile headline, sized between the masthead h1 (1.875rem)
+ * and the section-card h2s (1.125rem). App-owned element; its text is generated,
+ * its markup is not (it lives outside every .report-body).
+ */
+.report-headline {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
 .report-section > h2 {
   margin: 0 0 0.75rem;
   font-size: 1.125rem;

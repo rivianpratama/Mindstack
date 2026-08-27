@@ -25,11 +25,18 @@ INPUT: s[f] for f ∈ {Ni,Ne,Si,Se,Ti,Te,Fi,Fe};  B = 5
 
 0  REGIME CHECK (weak signal first; see §4 S5/S6 and §6):
      diff = max − min of the eight scores
-     diff ≤ 2B                         → FLAT (S6): honest null. No tiers are
+     diff ≤ B                          → FLAT (S6): honest null. No tiers are
                                           asserted, even if a boundary technically
                                           exists; the single largest gap may be
                                           named only as a tentative watch item.
-     no adjacent gap > B AND diff > 2B → STAIRCASE (S5): one segment, no tier
+     B < diff ≤ 2B                     → NEAR-FLAT low-confidence zone [H]: proceed
+                                          with the steps below (the regime stays
+                                          STAIRCASE or NORMAL), but attach a warning —
+                                          every reading rests on differences the noise
+                                          band could erase, the report must say so
+                                          plainly near its start, and no length
+                                          minimum applies (05 §5.1).
+     no adjacent gap > B AND diff > B  → STAIRCASE (S5): one segment, no tier
                                           boundaries; only upper-vs-lower-edge
                                           contrasts are interpretable.
      otherwise                         → continue.
@@ -73,7 +80,7 @@ All sums below use Σall = sum of the eight scores; E = {Ne, Se, Te, Fe}, I = {N
 - **Attitude tilt** = (ΣE − ΣI) / Σall, range −1…+1. Thresholds: |tilt| ≤ .05 neutral, ≤ .15 mild, > .15 strong; values within 20% past a cutoff carry a "borderline" qualifier per §2.2 [H cutoffs]. Interpretation: the profile's outward/inward processing metabolism [D — attitude as energy direction, per mbti-notes], explicitly **not** sociability or shyness [D — the source is emphatic on this].
 - **Axis polarization**, per opposing pair (Ni–Se, Ne–Si, Ti–Fe, Te–Fi): pol = |a − b|. The five-way scale, consumed verbatim by 03 §7: **balanced** if pol ≤ B, sub-classified by pair mean vs. profile mean into **balanced-high** and **balanced-low**; **leaning** if B < pol ≤ 2B; **polarized** if 2B < pol ≤ 4B; **extreme** if pol > 4B. Interpretations live in the taxonomy (S9–S11).
 - **Judging/perceiving pressure.** The index (ΣJ − ΣP) / Σall (tilt's thresholds [H]) is context only. The diagnostic is the **composition check on the active set** (§2 step 7): all-judging active set → judging pressure; all-perceiving → perceiving pressure; mixed → no pressure dynamic fires, and at most one hedged composition note (e.g., "judging-heavy, 3 J : 1 P") may be rendered [H]. All-judging: conclusions may outrun data-gathering; all-perceiving: intake without closure [D — both failure modes described by the source's J/P closure mechanics].
-- **Differentiation index** = S[0] − S[7] (the spread). Low if ≤ 2B (the FLAT regime), moderate if ≤ 4B, high above that [H cutoffs]. **Hard honesty rule:** low differentiation is a weak signal, and the report must say so plainly rather than invent content. A flat profile rendered as a rich portrait is a Barnum failure by construction [S: Forer 1949 — identical sketches rate as highly accurate].
+- **Differentiation index** = S[0] − S[7] (the spread). Low if ≤ 2B (the NEAR-FLAT low-confidence zone; the FLAT honest-null fires only at ≤ B, §2 step 0), moderate if ≤ 4B, high above that [H cutoffs]. **Hard honesty rule:** low differentiation is a weak signal, and the report must say so plainly rather than invent content. A flat profile rendered as a rich portrait is a Barnum failure by construction [S: Forer 1949 — identical sketches rate as highly accurate].
 - **Elevation** = mean of the eight scores. Never interpreted as overall ability, health, or development; elevation plausibly reflects self-report response style as much as psychology [H]. Used only to contextualize the all-high/all-low edge cases.
 
 ## 4. Shape taxonomy
@@ -90,9 +97,9 @@ Thirteen recurring signature shapes. Detection is arithmetic; interpretations ar
 
 **S4 · Compressed top.** *Detect:* |Lead| ≥ 4. *Hypotheses:* prioritization filters not strongly set — breadth of engagement bought at the cost of a default mode [H, inverting the source's efficiency-filter economics [D]]; or elevated, undifferentiated self-report. *Not:* mastery of four-plus functions. *Marker:* difficulty naming a single characteristic first move; an obvious signature first reach falsifies the face reading.
 
-**S5 · Staircase.** *Detect:* regime STAIRCASE (§2 step 0: no adjacent gap > B, differentiation > 2B). *Hypotheses:* gradual differentiation without discrete tiers; or measurement smear. *Not:* an eight-rung ladder — no adjacent rank is real. *Marker:* only extreme contrasts (upper vs. lower edge) should ring true; if even top-vs-bottom contrasts don't, the profile carries no usable signal and the report says so. Report behavior: extremes-only (03 §9, 05 §5.5).
+**S5 · Staircase.** *Detect:* regime STAIRCASE (§2 step 0: no adjacent gap > B, differentiation > B). *Hypotheses:* gradual differentiation without discrete tiers; or measurement smear. *Not:* an eight-rung ladder — no adjacent rank is real. *Marker:* only extreme contrasts (upper vs. lower edge) should ring true; if even top-vs-bottom contrasts don't, the profile carries no usable signal and the report says so. Report behavior: extremes-only (03 §9, 05 §5.5).
 
-**S6 · Flat.** *Detect:* regime FLAT (differentiation ≤ 2B) — takes precedence over **all** other shapes; when it holds, no other shape is rendered even if a boundary technically exists. *Interpretation:* weak signal — honest null [hard rule]. Offered hypotheses only: genuinely even engagement, undifferentiated self-knowledge, or neutral/careless responding [D — the source catalogs self-report failure modes]. *Not:* "you are balanced and adaptable" — a Barnum item that flatters everyone and differentiates no one. *Marker:* none derivable — which is exactly the sentence the report must contain. Report schema: 05 §5.1 and §5.5.
+**S6 · Flat.** *Detect:* regime FLAT (differentiation ≤ B) — takes precedence over **all** other shapes; when it holds, no other shape is rendered even if a boundary technically exists. *Interpretation:* weak signal — honest null [hard rule]. Offered hypotheses only: genuinely even engagement, undifferentiated self-knowledge, or neutral/careless responding [D — the source catalogs self-report failure modes]. *Not:* "you are balanced and adaptable" — a Barnum item that flatters everyone and differentiates no one. *Marker:* none derivable — which is exactly the sentence the report must contain. Report schema: 05 §5.1 and §5.5.
 
 **S7 · Cliff floor.** *Detect:* |Shadow| = 1 and the final gap > 2B (marginal cliff if ≤ 2.4B, per §2.2). *Hypotheses — hold all three* [H]: suppression (active repression, predicting eruptive return [D→H — Quenk's grip, via mbti-notes, re-keyed to gap-derived floors]); avoidance (the domain is feared or devalued [D — the source's contrarian-influence principle: a repressed function still shapes the worldview through what gets disowned, disavowed, or defined as unimportant]); simple non-development (never practiced, no drama). *Not:* incapacity, and never a diagnosis. *Marker:* suppression predicts crude, out-of-character eruptions in that domain under fatigue or stress; non-development predicts plain absence without eruption — which one the reader recognizes discriminates the hypotheses. Smooth handling of the domain under stress falsifies all three.
 
@@ -132,7 +139,7 @@ Profile: Ni 39.6, Ti 34, Te 31, Fi 30, Ne 25.4, Se 25, Si 21, Fe 8.
 
 Other edge cases:
 
-- **All-high** (elevation ≥ 37.5): interpret shape only; elevation is confounded with response style [H]. If differentiation is also ≤ 2B, FLAT governs.
+- **All-high** (elevation ≥ 37.5): interpret shape only; elevation is confounded with response style [H]. If differentiation is also ≤ B, FLAT governs.
 - **All-low** (elevation ≤ 12.5): same shape-only rule; hypotheses include disengaged or self-effacing responding and low self-clarity [H]. Never read low elevation as deficiency or distress — no diagnosis.
 - **FLAT / STAIRCASE:** see §2 step 0 and S5/S6. FLAT → the honest-null report (05 §5.1 flat schema): state that the instrument returned little structure, suggest a retest or the finer-grained 256-item Domains test, and generate **no** trait content. STAIRCASE → extremes-only reporting.
 - **Multiple cliffs (≥ 2):** a stratified profile. Each cliff is a separate interpretable feature; treat each isolated lower tier on its own terms and never rank functions inside any tier.

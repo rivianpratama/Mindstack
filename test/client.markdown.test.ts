@@ -12,6 +12,7 @@ import {
   couldContinueHeading,
   createSectionSplitter,
   escapeHtml,
+  extractHeadline,
   matchSectionTitle,
   renderMarkdown,
   splitSections,
@@ -323,5 +324,44 @@ describe('createSectionSplitter', () => {
     expect(html).not.toContain('[H]');
     // Generous tripwire: a quadratic regression blows straight through this.
     expect(elapsed).toBeLessThan(5000);
+  });
+});
+
+describe('the report headline (a single-# preamble line)', () => {
+  it('withholds a streaming single-# tail whatever its text', () => {
+    expect(couldContinueHeading('# ')).toBe(true);
+    expect(couldContinueHeading('# A Mind That Che')).toBe(true);
+    expect(couldContinueHeading('#')).toBe(true);
+  });
+
+  it('extracts the headline and hands back the remaining preamble', () => {
+    expect(extractHeadline('# Quick Mind, Slow Heart\n')).toEqual({
+      headline: 'Quick Mind, Slow Heart',
+      rest: '',
+    });
+    expect(extractHeadline('\n\n# A Headline ##\nleft over')).toEqual({
+      headline: 'A Headline',
+      rest: 'left over',
+    });
+    // Emphasis markers never reach textContent as literal asterisks.
+    expect(extractHeadline('# **Bold Claim, Quiet Cost**\n').headline).toBe(
+      'Bold Claim, Quiet Cost',
+    );
+  });
+
+  it('leaves everything that is not a single-# first line untouched', () => {
+    for (const preamble of ['plain preamble text', '## Not a headline', '#nospace', '', '   ', '# ']) {
+      expect(extractHeadline(preamble)).toEqual({ headline: null, rest: preamble });
+    }
+  });
+
+  it('keeps the headline line inside the preamble section, never a section card', () => {
+    const splitter = createSectionSplitter();
+    splitter.push(`# The Headline\n\n## ${SECTION_TITLES[0]}\nBody.\n`);
+    splitter.end();
+    const sections = splitter.snapshot();
+    expect(sections[0]!.title).toBeNull();
+    expect(extractHeadline(sections[0]!.body).headline).toBe('The Headline');
+    expect(sections[1]!.title).toBe(SECTION_TITLES[0]);
   });
 });

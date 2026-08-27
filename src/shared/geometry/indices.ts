@@ -143,11 +143,11 @@ export function computeIndices(input: IndicesInput): Indices {
   /* Differentiation index = S[0] - S[7]. */
   let diffClass: DifferentiationClass;
   let diffBorderline = false;
-  if (spread <= t.flatSpread) {
+  if (spread <= t.lowSpread) {
     diffClass = 'low';
   } else if (spread <= t.moderateSpread) {
     diffClass = 'moderate';
-    diffBorderline = isBorderlinePast(spread, t.flatSpread);
+    diffBorderline = isBorderlinePast(spread, t.lowSpread);
   } else {
     diffClass = 'high';
     diffBorderline = isBorderlinePast(spread, t.moderateSpread);

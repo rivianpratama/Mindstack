@@ -337,3 +337,60 @@ describe('02 §4 S12 / 03 §3 - a both-attitudes lead fires no circuit', () => {
     expect(sig.shapes.find((s) => s.id === 'S2')!.variant).toBe('mixed');
   });
 });
+
+describe('02 §2 step 0 - NEAR-FLAT low-confidence zone (B < spread <= 2B)', () => {
+  // Spread 8 with one 6-point cut: clears the relaxed flat gate and resolves two tiers.
+  const normal = computeSignature({
+    Ni: 30,
+    Ne: 30,
+    Ti: 29,
+    Te: 29,
+    Fe: 23,
+    Si: 23,
+    Se: 22,
+    Fi: 22,
+  });
+
+  it('generates (NORMAL), reads differentiation low, and carries the warning', () => {
+    expect(normal.regime).toBe('NORMAL');
+    expect(normal.indices.differentiation.class).toBe('low');
+    expect(normal.warnings.some((w) => w.includes('NEAR-FLAT'))).toBe(true);
+  });
+
+  it('sends a cut-free near-flat spread to STAIRCASE with the same warning', () => {
+    // Spread 8, monotone small steps: previously FLAT, now a short hedged report.
+    const staircase = computeSignature({
+      Ni: 30,
+      Ne: 29,
+      Si: 28,
+      Se: 27,
+      Ti: 26,
+      Te: 25,
+      Fi: 24,
+      Fe: 22,
+    });
+    expect(staircase.regime).toBe('STAIRCASE');
+    expect(staircase.indices.differentiation.class).toBe('low');
+    expect(staircase.warnings.some((w) => w.includes('NEAR-FLAT'))).toBe(true);
+  });
+
+  it('keeps FLAT inside one noise band, without the near-flat warning', () => {
+    const flat = computeSignature({
+      Ni: 27,
+      Ne: 25,
+      Si: 24,
+      Se: 23,
+      Ti: 26,
+      Te: 25,
+      Fi: 24,
+      Fe: 23,
+    });
+    expect(flat.regime).toBe('FLAT');
+    expect(flat.warnings.some((w) => w.includes('NEAR-FLAT'))).toBe(false);
+  });
+
+  it('derives the gate from B: flatSpread = B, lowSpread = 2B', () => {
+    expect(normal.thresholds.flatSpread).toBe(5);
+    expect(normal.thresholds.lowSpread).toBe(10);
+  });
+});

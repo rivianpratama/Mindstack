@@ -216,6 +216,7 @@ describe('POST /api/generate — prompted-reasoning wiring to streamReport', () 
       await post(PROFILE_A);
       const request = control.requests.at(-1)!;
       expect(request.reportHeadings).toEqual([
+        '# ',
         '## How your mind tends to work',
         '## How you handle different situations',
         '## When things get stressful',
@@ -236,8 +237,9 @@ describe('POST /api/generate — prompted-reasoning wiring to streamReport', () 
       ];
       await post(PROFILE_A, { language: 'id' });
       const request = control.requests.at(-1)!;
-      expect((request.reportHeadings as string[])[0]).toBe('## Cara pikiranmu biasanya bekerja');
-      expect(request.reportHeadings as string[]).toHaveLength(6);
+      expect((request.reportHeadings as string[])[0]).toBe('# ');
+      expect((request.reportHeadings as string[])[1]).toBe('## Cara pikiranmu biasanya bekerja');
+      expect(request.reportHeadings as string[]).toHaveLength(7);
     });
   });
 

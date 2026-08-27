@@ -154,3 +154,28 @@ describe('prelude splitter, streaming liveness', () => {
     expect(content).toBe(`${HEADING}\nBody.`);
   });
 });
+
+describe('the headline line as the boundary (reportHeadings gains "# ")', () => {
+  const WITH_HEADLINE = ['# ', ...REPORT_HEADINGS_EN];
+
+  it('starts content at the headline line, before any canonical heading', () => {
+    const { thinking, content } = run(
+      ['plan line\n# A Mind That Checks Twice\n\n', `${HEADING}\n\nBody.`],
+      WITH_HEADLINE,
+    );
+    expect(thinking).toBe('plan line\n');
+    expect(content).toBe(`# A Mind That Checks Twice\n\n${HEADING}\n\nBody.`);
+  });
+
+  it('holds a bare "#" until the next delta resolves it into the headline', () => {
+    const { thinking, content } = run(['plan\n#', ' A Headline\nrest'], WITH_HEADLINE);
+    expect(thinking).toBe('plan\n');
+    expect(content).toBe('# A Headline\nrest');
+  });
+
+  it('still splits at a canonical heading when the model skips the headline', () => {
+    const { thinking, content } = run(['plan\n', `${HEADING}\n\nBody.`], WITH_HEADLINE);
+    expect(thinking).toBe('plan\n');
+    expect(content).toBe(`${HEADING}\n\nBody.`);
+  });
+});

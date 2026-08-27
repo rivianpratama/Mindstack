@@ -210,7 +210,10 @@ export interface Assembly {
    * when the plan swallows the report. Null off the prompted-reasoning path (and FLAT).
    */
   userPromptNoPlan: string | null;
-  /** Exact canonical headings for this language; the prelude splitter keys on them. */
+  /**
+   * The line prefixes that mark the report's start; the prelude splitter keys on them.
+   * On LLM paths: '# ' (the headline line) plus this language's exact canonical headings.
+   */
   reportHeadings: string[];
   /** Completion cap sized to the render plan's word budget (05 §5.1). */
   maxTokens: number;
@@ -812,7 +815,10 @@ export function assemblePrompt(
   const fragments = resolve(fragmentKeys);
   const budgetWords = renderPlan.reduce((sum, feature) => sum + feature.budgetWords, 0);
   // A STAIRCASE profile resolves almost nothing: no minimum, because padding it would lie.
-  const minWords = signature.regime === 'NORMAL' ? MIN_REPORT_WORDS : 0;
+  // Neither does a NEAR-FLAT one (differentiation 'low', 02 §2 step 0): its structure sits
+  // close to the noise floor, and buying length there would manufacture confidence.
+  const nearFlat = signature.indices.differentiation.class === 'low';
+  const minWords = signature.regime === 'NORMAL' && !nearFlat ? MIN_REPORT_WORDS : 0;
 
   // Prompted reasoning (the default): the prompt scripts a planning pass, and the no-plan
   // variant is assembled alongside it as the one-shot retry prompt. Native/none paths get
@@ -842,7 +848,10 @@ export function assemblePrompt(
     systemPrompt: fullSystemPrompt(),
     userPrompt: buildUserPrompt({ ...promptInput, plan: prompted }),
     userPromptNoPlan: prompted ? buildUserPrompt({ ...promptInput, plan: false }) : null,
-    reportHeadings: [...headingsFor(language)],
+    // '# ' first: the headline line opens the report, so the prelude splitter treats it
+    // as the plan/report boundary. Safe as a bare prefix because plan lines are forbidden
+    // from starting with '#' (PLANNING_PASS_INSTRUCTIONS).
+    reportHeadings: ['# ', ...headingsFor(language)],
     // Output budget (~2.2 tokens/word + slack) PLUS a reasoning allowance sized to the
     // active mode (reasoning bills against the same max_tokens as the report): a wide one
     // for native thinking, a small one for the capped prompted plan, none for `none`.
@@ -1681,8 +1690,9 @@ const PLANNING_PASS_INSTRUCTIONS: readonly string[] = [
     '"#". Codes, grades, internal terms and figures ARE allowed in the plan (it is private ' +
     'and is not the report). Write the plan in English whatever language the report is ' +
     'written in.',
-  'Then write the report, starting directly at the first canonical heading. The report ' +
-    'must stand alone: never refer to the plan, never write "as planned" or "as noted above".',
+  'Then write the report, starting directly at the headline line (`# `), followed by the ' +
+    'first canonical heading. The report must stand alone: never refer to the plan, never ' +
+    'write "as planned" or "as noted above".',
 ];
 
 const GROUP_TITLES: Record<SelectedFragment['group'], string> = {
@@ -1837,10 +1847,23 @@ function buildUserPrompt(input: UserPromptInput): string {
     out.push('');
   }
   out.push(
+    'HEADLINE. The report\'s very first line is exactly one line of the form `# <headline>` ' +
+      '(one `#`, one space), followed by a blank line, then the first canonical heading. ' +
+      'Write it the way a front-page newspaper headline is written: one short declarative ' +
+      'sentence that captures the whole report\'s central finding about this person, so ' +
+      'specific that a different profile would need a different headline. Plain everyday ' +
+      'words, at most twelve words, written in the report\'s language. Never a number, a ' +
+      'score, a grade word, a two-letter habit code, or a type label; no colon, no em-dash, ' +
+      'no quotation marks; never a restatement of a section heading; the client renders it ' +
+      'as the report\'s title.',
+  );
+  out.push('');
+  out.push(
     'Write Sections 2–7 ONLY. Section 1 is rendered client-side from the Signature above; ' +
       'do not restate it. Use EXACTLY these markdown headings, in this order, with nothing ' +
-      (plan ? 'before the first one except the planning pass described above ' : 'before the first one ') +
-      '(the client matches these strings to render its cards):',
+      'before the first one except ' +
+      (plan ? 'the planning pass described above and ' : '') +
+      'the single headline line (the client matches these strings to render its cards):',
   );
   out.push('');
   for (const heading of headingsFor(language)) out.push(`- \`${heading}\``);

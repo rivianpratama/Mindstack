@@ -92,6 +92,20 @@ export function analyzeTiers(scores: Scores, options: ResolvedGeometryOptions): 
   if (spread <= t.flatSpread) regime = 'FLAT';
   else if (!anyCut) regime = 'STAIRCASE';
 
+  /*
+   * NEAR-FLAT low-confidence zone (02 §2 step 0): the profile clears the honest-null
+   * gate but its whole spread still fits inside two noise bands. The reading proceeds,
+   * carrying a warning the prompt ships to the model verbatim.
+   */
+  if (regime !== 'FLAT' && spread <= t.lowSpread) {
+    warnings.push(
+      `NEAR-FLAT: spread ${spread} is at most two noise bands (<= ${t.lowSpread}). Every ` +
+        "reading here rests on differences close to the quiz's noise floor, so the whole " +
+        'report is low-confidence: say so plainly near the start, hedge every claim, and ' +
+        'expect a retake to reshuffle the order.',
+    );
+  }
+
   const emptyTiers: Tiers = { lead: [], support: [], reserve: [], shadow: [] };
   const noTierOf = Object.fromEntries(order.map((fn) => [fn, null])) as Record<
     FunctionKey,
@@ -106,7 +120,7 @@ export function analyzeTiers(scores: Scores, options: ResolvedGeometryOptions): 
      */
     const largest = gaps.reduce((best, gap) => (gap.value > best.value ? gap : best), gaps[0]);
     warnings.push(
-      `FLAT regime: spread ${spread} is within the noise band's reach (<= ${t.flatSpread}). ` +
+      `FLAT regime: the whole profile fits inside one noise band (spread ${spread} <= ${t.flatSpread}). ` +
         'No tiers asserted; weak signal must be stated plainly rather than interpreted.',
     );
     return {

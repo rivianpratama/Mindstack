@@ -106,11 +106,16 @@ async function run(scores: Scores, language: ReportLanguage): Promise<void> {
    * and it costs nothing.
    */
   let signatureRegime = 'NORMAL';
+  let closeScores = false;
   let signatureView: HTMLElement | null = null;
   let tierStrip: HTMLElement | null = null;
   try {
     const signature = computeSignature(scores);
     signatureRegime = signature.regime;
+    // NEAR-FLAT (02 §2 step 0): cleared the flat gate, but the whole spread still fits
+    // inside two noise bands, so the report ships with a low-confidence warning.
+    closeScores =
+      signature.regime !== 'FLAT' && signature.indices.differentiation.class === 'low';
     signatureView = createSignatureView(signature);
     signatureView.classList.add('t-toast');
     // The headline reading goes up straight away, above the thinking panel.
@@ -139,6 +144,7 @@ async function run(scores: Scores, language: ReportLanguage): Promise<void> {
   outputSlot.appendChild(report.element);
   report.setStatus('interpreting your profile…');
   if (signatureRegime === 'FLAT') report.showFlatNotice();
+  else if (closeScores) report.showCloseScoresNotice();
 
   /*
    * Wait for the collapse to settle before scrolling. scrollIntoView computes

@@ -87,8 +87,30 @@ export function matchSectionTitle(line: string): string | null {
  */
 export function couldContinueHeading(tail: string): boolean {
   if (tail === '' || !tail.startsWith('#')) return false;
+  // A single-# line is the model-authored report headline still streaming. Its text is
+  // arbitrary, so it is withheld until its newline arrives rather than prefix-matched.
+  if (tail === '#' || tail.startsWith('# ')) return true;
   const lower = tail.toLowerCase();
   return HEADINGS.some((heading) => heading.toLowerCase().startsWith(lower));
+}
+
+/**
+ * The model-authored report headline: the preamble's first non-blank line, when that line
+ * is a single-`#` markdown heading. Returns the headline text (trailing hashes stripped,
+ * like renderMarkdown's headings) and the preamble minus everything through that line.
+ * Anything that is not exactly that shape passes through untouched as ordinary preamble.
+ */
+export function extractHeadline(preamble: string): { headline: string | null; rest: string } {
+  const lines = preamble.split('\n');
+  let first = 0;
+  while (first < lines.length && lines[first].trim() === '') first += 1;
+  if (first >= lines.length) return { headline: null, rest: preamble };
+  const match = /^#\s+(.*)$/.exec(lines[first].trim());
+  // Trailing hashes and emphasis markers are dropped: the headline renders as
+  // textContent, where markdown syntax would show up as literal asterisks.
+  const text = match ? match[1].replace(/\s*#+$/, '').replace(/[*_`]/g, '').trim() : '';
+  if (!match || text === '') return { headline: null, rest: preamble };
+  return { headline: text, rest: lines.slice(first + 1).join('\n') };
 }
 
 export interface ReportSection {
@@ -326,6 +348,8 @@ export interface ReportView {
   finish(): void;
   setStatus(text: string | null): void;
   showFlatNotice(): void;
+  /** The NEAR-FLAT warning: scores cleared the flat gate but sit close together. */
+  showCloseScoresNotice(): void;
   showError(message: string, onRetry: () => void): void;
 }
 
@@ -360,6 +384,9 @@ export function createReportView(): ReportView {
   let anyText = false;
   let streaming = true;
   let flatNoticeShown = false;
+  let closeNoticeShown = false;
+  /** The model-authored headline, in an app-owned element above the section cards. */
+  let headlineEl: HTMLElement | null = null;
   let errorCard: HTMLElement | null = null;
   /** The live reasoning panel; created on the first thinking delta. */
   let thinking: ThinkingPanelApi | null = null;
@@ -412,14 +439,38 @@ export function createReportView(): ReportView {
    * Re-render only the sections the splitter reports as changed - in practice
    * the one still being written, plus the one just sealed above it.
    */
+  /**
+   * Generated text goes in via textContent, so the escaping boundary holds; the element
+   * itself is app-owned markup outside every .report-body, like the card headings.
+   */
+  const setHeadline = (text: string): void => {
+    if (!headlineEl) {
+      headlineEl = el('h2', 'report-headline t-toast');
+      element.insertBefore(headlineEl, sectionHost);
+      const node = headlineEl;
+      requestAnimationFrame(() => node.classList.add('is-open'));
+    }
+    if (headlineEl.textContent !== text) headlineEl.textContent = text;
+  };
+
   const paint = () => {
     for (const section of splitter.drain()) {
+      let body = section.body;
+      if (section.index === 0 && section.title === null) {
+        // The preamble's leading `# ` line is the report headline, rendered above the
+        // cards rather than inside one.
+        const { headline, rest } = extractHeadline(body);
+        if (headline !== null) {
+          setHeadline(headline);
+          body = rest;
+        }
+      }
       // An empty preamble means the model went straight to a heading: no card.
-      if (section.title === null && section.body.trim() === '' && !cards.has(section.index)) {
+      if (section.title === null && body.trim() === '' && !cards.has(section.index)) {
         continue;
       }
       const card = ensureCard(section.index, section.title);
-      const html = applyTagChips(renderMarkdown(section.body));
+      const html = applyTagChips(renderMarkdown(body));
       if (html !== card.html) {
         card.body.innerHTML = html;
         card.html = html;
@@ -694,6 +745,45 @@ export function createReportView(): ReportView {
           undefined,
           'A flat profile is not a deficiency, an absence of personality, or a worse result. ' +
             'It is a measurement outcome.',
+        ),
+      );
+      body.appendChild(list);
+      box.appendChild(body);
+      banners.prepend(box);
+    },
+
+    showCloseScoresNotice() {
+      if (closeNoticeShown) return;
+      closeNoticeShown = true;
+      const box = banner(
+        'warn',
+        'Your scores sit close together, so read this report with extra care',
+      );
+      const body = el('div', 'banner-body');
+      body.appendChild(
+        el(
+          'p',
+          undefined,
+          'The gap between your highest and lowest score is small enough that this ' +
+            'instrument\'s own noise could account for much of it. The report below was ' +
+            'still generated, but its readings rest on small differences.',
+        ),
+      );
+      const list = el('ul');
+      list.appendChild(
+        el(
+          'li',
+          undefined,
+          'A retake often moves scores by several points, so the ordering the report ' +
+            'reads from may flip next time. Treat every claim as a rough guess to test.',
+        ),
+      );
+      list.appendChild(
+        el(
+          'li',
+          undefined,
+          'The 256-item Sakinorva Domains Test is finer-grained, and is a better input if ' +
+            'you want firmer ground.',
         ),
       );
       body.appendChild(list);

@@ -71,8 +71,8 @@ One canonical definition per term. The component in parentheses owns the term; o
 - **Judging/perceiving pressure** — fires from the composition of the active set (all-judging → judging pressure; all-perceiving → perceiving pressure; mixed → no fire, hedged note at most); the (ΣJ − ΣP) index is context only. [D→H]
 - **Differentiation index** — max minus min of the eight scores; low values are weak signal. [H]
 - **Elevation** — mean of the eight scores; never interpreted as ability, health, or development. [H]
-- **FLAT regime / honest-null rule** — differentiation ≤ 2B: weak signal reported as weak signal, never filled with invented content; takes precedence over every other shape. [H, motivated by Forer 1949 [S]]
-- **STAIRCASE regime** — no adjacent gap exceeds B but differentiation > 2B: no tier boundaries; only upper-vs-lower-edge extremes are interpretable. [H]
+- **FLAT regime / honest-null rule** — differentiation ≤ B: weak signal reported as weak signal, never filled with invented content; takes precedence over every other shape. Differentiation in (B, 2B] is the NEAR-FLAT low-confidence zone: the report proceeds, flagged. [H, motivated by Forer 1949 [S]]
+- **STAIRCASE regime** — no adjacent gap exceeds B but differentiation > B: no tier boundaries; only upper-vs-lower-edge extremes are interpretable. [H]
 - **Shape taxonomy (S1–S12 + S3b)** — lead spike (graded marginal / clear / hard), twin peak, pluralistic lead cluster, pluralistic sub-cluster, compressed top, staircase, flat, cliff floor, bimodal split (hollow middle), polarized axis, balanced-high axis, balanced-low axis, single-attitude lead (circuit candidate). (02 §4)
 - **Pluralistic sub-cluster (S3b)** — three or more functions mutually within one noise band forming the upper edge below a marginal lead boundary (or of a smeared lead); the licensed detection for "near-lead" clusters — always watch-item grade. [H]
 - **Counterweight** — relative to a single-attitude lead, the highest-scoring opposite-attitude function: the profile's built-in exit ramp; reports name it and its activation conditions. [H]
