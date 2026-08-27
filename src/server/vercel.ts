@@ -1,7 +1,15 @@
-import { handle } from 'hono/vercel';
-import { app } from '../src/server/app';
+/**
+ * Vercel Serverless Function entrypoint.
+ *
+ * Bundled by esbuild into api/index.js during `npm run build`.
+ */
 
-export const runtime = 'edge';
+import { handle } from 'hono/vercel';
+import { app } from './app';
+
+export const config = {
+  maxDuration: 60,
+};
 
 export const GET = handle(app);
 export const POST = handle(app);
