@@ -10,9 +10,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { Hono } from 'hono';
 
-import { generateRoute } from './routes/generate';
+import { app } from './app';
 import { isConfigured } from './deepseek';
 
 /*
@@ -36,14 +35,6 @@ try {
 } catch {
   /* .env is optional. */
 }
-
-export const app = new Hono();
-
-app.get('/api/health', (c) =>
-  c.json({ ok: true, generator: isConfigured() ? 'configured' : 'unconfigured' }),
-);
-
-app.route('/api', generateRoute);
 
 /*
  * In production (standalone Node), the client is a built Vite bundle in ./dist; in dev, Vite
@@ -69,4 +60,5 @@ if (isEntryPoint) {
   });
 }
 
+export { app };
 export default app;

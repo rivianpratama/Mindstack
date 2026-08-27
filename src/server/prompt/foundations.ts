@@ -12,8 +12,7 @@
  * `node scripts/build-foundations.mjs` (compiles docs/knowledge 00-04 + 06-foundations-digest).
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import foundationsData from './foundations.json';
 import { SYSTEM_PROMPT } from './system-prompt';
 
 interface FoundationsArtifact {
@@ -26,32 +25,12 @@ interface FoundationsArtifact {
   text: string;
 }
 
-let cache: string | null = null;
-
-function loadFoundationsText(): string {
-  const candidates: Array<string | URL> = [
-    new URL('./foundations.json', import.meta.url),
-    resolve(process.cwd(), 'src/server/prompt/foundations.json'),
-  ];
-
-  let lastError: unknown = null;
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as FoundationsArtifact;
-      if (!parsed || typeof parsed.text !== 'string' || parsed.text.length === 0) {
-        throw new Error('foundations.json has no `text` string');
-      }
-      return parsed.text;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw new Error(
-    'prompt/foundations: could not load foundations.json. Run `node scripts/build-foundations.mjs`. ' +
-      `Last error: ${String(lastError)}`,
-  );
+const artifact = foundationsData as unknown as FoundationsArtifact;
+if (!artifact || typeof artifact.text !== 'string' || artifact.text.length === 0) {
+  throw new Error('prompt/foundations: foundations.json has no `text` string.');
 }
+
+let cache: string | null = null;
 
 /**
  * The full system message: foundations (Part A) followed by the generation contract (Part B).
@@ -62,6 +41,6 @@ function loadFoundationsText(): string {
  */
 export function fullSystemPrompt(): string {
   if (cache !== null) return cache;
-  cache = `${loadFoundationsText()}\n\n${SYSTEM_PROMPT}`;
+  cache = `${artifact.text}\n\n${SYSTEM_PROMPT}`;
   return cache;
 }

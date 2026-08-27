@@ -1,9 +1,7 @@
 import { handle } from 'hono/vercel';
-import { app } from '../src/server/index';
+import { app } from '../src/server/app';
 
-export const config = {
-  maxDuration: 60,
-};
+export const runtime = 'edge';
 
 export const GET = handle(app);
 export const POST = handle(app);

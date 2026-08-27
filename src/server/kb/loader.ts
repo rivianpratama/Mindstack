@@ -10,8 +10,7 @@
  * (the module resolves the artifact relative to `import.meta.url`).
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import fragmentsData from './fragments.json';
 
 // ---------------------------------------------------------------- key types
 
@@ -127,34 +126,13 @@ export interface FragmentStore {
   fragments: Record<string, string>;
 }
 
-let cache: FragmentStore | null = null;
+const store = fragmentsData as unknown as FragmentStore;
+if (!store || typeof store.fragments !== 'object') {
+  throw new Error('kb/loader: fragments.json has no `fragments` object');
+}
 
 function loadStore(): FragmentStore {
-  if (cache) return cache;
-
-  const candidates: Array<string | URL> = [
-    new URL('./fragments.json', import.meta.url),
-    resolve(process.cwd(), 'src/server/kb/fragments.json'),
-  ];
-
-  let lastError: unknown = null;
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as FragmentStore;
-      if (!parsed || typeof parsed.fragments !== 'object') {
-        throw new Error('fragments.json has no `fragments` object');
-      }
-      cache = parsed;
-      return cache;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw new Error(
-    'kb/loader: could not load fragments.json. Run `node scripts/build-kb.mjs`. ' +
-      `Last error: ${String(lastError)}`,
-  );
+  return store;
 }
 
 function get(key: string): string {
