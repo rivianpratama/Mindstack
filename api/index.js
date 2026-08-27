@@ -17021,6 +17021,9 @@ var DEFAULT_MODEL = "deepseek-v4-flash";
 var DEFAULT_BASE_URL = "https://api.deepseek.com";
 var OPENROUTER_DEFAULT_MODEL = "minimax/minimax-m3:free";
 var OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
+var GEMINI_DEFAULT_MODEL = "gemini-3.7-flash";
+var GEMINI_DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
+var GEMINI_MIN_THINKING_LEVEL = "low";
 var TEMPERATURE = 0.5;
 var TIMEOUT_MS = 6e5;
 var MAX_ATTEMPTS = 3;
@@ -17084,6 +17087,16 @@ function envKey(name) {
 }
 function resolveProviders() {
   const providers = [];
+  const geminiKey = envKey("GEMINI_API_KEY");
+  if (geminiKey) {
+    providers.push({
+      name: "gemini",
+      kind: "gemini",
+      apiKey: geminiKey,
+      baseURL: process.env.GEMINI_BASE_URL || GEMINI_DEFAULT_BASE_URL,
+      model: process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL
+    });
+  }
   const openRouterKey = envKey("OPENROUTER_API_KEY");
   if (openRouterKey) {
     providers.push({
@@ -17142,6 +17155,13 @@ function buildChatRequest(input) {
     const reasoning = !thinkingOn ? { enabled: false } : effort !== null ? { effort } : { enabled: true };
     return { ...common, reasoning };
   }
+  if (input.kind === "gemini") {
+    const thinkingConfig = !thinkingOn ? { thinking_level: GEMINI_MIN_THINKING_LEVEL, include_thoughts: false } : effort !== null ? { thinking_level: effort === "max" ? "high" : effort, include_thoughts: true } : null;
+    return {
+      ...common,
+      ...thinkingConfig ? { extra_body: { google: { thinking_config: thinkingConfig } } } : {}
+    };
+  }
   return {
     ...common,
     // The DeepSeek-documented on/off switch for hybrid reasoning.
@@ -17185,18 +17205,18 @@ async function* streamReport(request) {
   for (let i = 0; i < providers.length; i += 1) {
     const provider = providers[i];
     const isLast = i === providers.length - 1;
-    let yielded = false;
+    let contentYielded = false;
     try {
       for await (const item of streamOneProvider(request, provider)) {
-        yielded = true;
+        if (item.kind === "content") contentYielded = true;
         yield item;
       }
       return;
     } catch (error) {
-      if (yielded || isLast) throw error;
+      if (contentYielded || isLast) throw error;
       const next = providers[i + 1];
       console.error(
-        `[failover] ${provider.name} failed before the first byte; trying ${next.name}: ` + (error instanceof Error ? error.message : String(error))
+        `[failover] ${provider.name} failed before any report content; trying ${next.name}: ` + (error instanceof Error ? error.message : String(error))
       );
     }
   }

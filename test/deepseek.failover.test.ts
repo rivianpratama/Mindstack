@@ -62,12 +62,15 @@ const {
   buildChatRequest,
   resolveProviders,
   isConfigured,
+  GEMINI_DEFAULT_MODEL,
+  GEMINI_DEFAULT_BASE_URL,
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_DEFAULT_BASE_URL,
   DEFAULT_MODEL,
   DEFAULT_BASE_URL,
 } = await import('../src/server/deepseek');
 
+const GM_MODEL = GEMINI_DEFAULT_MODEL;
 const OR_MODEL = OPENROUTER_DEFAULT_MODEL;
 const DS_MODEL = DEFAULT_MODEL;
 
@@ -80,6 +83,9 @@ async function collect(): Promise<StreamReportItem[]> {
 // Every env var the provider resolver reads, saved and restored around each test so the
 // suite never leaks a key into another file's process.env.
 const ENV_KEYS = [
+  'GEMINI_API_KEY',
+  'GEMINI_MODEL',
+  'GEMINI_BASE_URL',
   'OPENROUTER_API_KEY',
   'OPENROUTER_MODEL',
   'OPENROUTER_BASE_URL',
@@ -132,6 +138,43 @@ describe('resolveProviders', () => {
       model: DEFAULT_MODEL,
       baseURL: DEFAULT_BASE_URL,
     });
+  });
+
+  it('puts Gemini FIRST, then OpenRouter, then DeepSeek when all three keys are set', () => {
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.OPENROUTER_API_KEY = 'sk-or-stub';
+    process.env.DEEPSEEK_API_KEY = 'sk-ds-stub';
+
+    const providers = resolveProviders();
+
+    expect(providers.map((p) => p.name)).toEqual(['gemini', 'openrouter', 'deepseek']);
+    expect(providers[0]).toMatchObject({
+      kind: 'gemini',
+      apiKey: 'sk-gm-stub',
+      model: GEMINI_DEFAULT_MODEL,
+      baseURL: GEMINI_DEFAULT_BASE_URL,
+    });
+  });
+
+  it('defaults the Gemini model to gemini-3.7-flash on the OpenAI-compatible endpoint', () => {
+    expect(GEMINI_DEFAULT_MODEL).toBe('gemini-3.7-flash');
+    expect(GEMINI_DEFAULT_BASE_URL).toBe('https://generativelanguage.googleapis.com/v1beta/openai/');
+  });
+
+  it('honours GEMINI_MODEL and GEMINI_BASE_URL overrides', () => {
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.GEMINI_MODEL = 'gemini-2.5-flash';
+    process.env.GEMINI_BASE_URL = 'https://proxy.example/v1beta/openai/';
+
+    expect(resolveProviders()[0]).toMatchObject({
+      model: 'gemini-2.5-flash',
+      baseURL: 'https://proxy.example/v1beta/openai/',
+    });
+  });
+
+  it('degrades to Gemini alone when only its key is set', () => {
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    expect(resolveProviders().map((p) => p.name)).toEqual(['gemini']);
   });
 
   it('defaults the OpenRouter model to the best available free option (minimax-m3)', () => {
@@ -229,6 +272,64 @@ describe('buildChatRequest per provider kind', () => {
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'usr' },
     ]);
+  });
+
+  it('translates Gemini thinking-off to the lowest accepted level (low), thoughts hidden', () => {
+    for (const effort of ['none', 'prompted', '']) {
+      const request = buildChatRequest({ ...base, kind: 'gemini', reasoningEffort: effort }) as Record<
+        string,
+        unknown
+      >;
+      // Gemini 3 cannot fully disable thinking, and gemini-3.7-flash REJECTS 'minimal' (400,
+      // verified live 2026-08-28); 'low' is its floor. Thoughts stay hidden on the off path.
+      expect(request.extra_body, `"${effort}" must send native thinking_config`).toEqual({
+        google: { thinking_config: { thinking_level: 'low', include_thoughts: false } },
+      });
+      // Never the OpenAI reasoning_effort knob (mutually exclusive with thinking_config), and
+      // never the DeepSeek `thinking` or OpenRouter `reasoning` fields.
+      expect('reasoning_effort' in request).toBe(false);
+      expect('thinking' in request).toBe(false);
+      expect('reasoning' in request).toBe(false);
+    }
+  });
+
+  it('maps an explicit native level to thinking_level and surfaces the thoughts', () => {
+    const high = buildChatRequest({ ...base, kind: 'gemini', reasoningEffort: 'high' }) as Record<
+      string,
+      unknown
+    >;
+    expect(high.extra_body).toEqual({
+      google: { thinking_config: { thinking_level: 'high', include_thoughts: true } },
+    });
+
+    const low = buildChatRequest({ ...base, kind: 'gemini', reasoningEffort: 'low' }) as Record<
+      string,
+      unknown
+    >;
+    expect(low.extra_body).toEqual({
+      google: { thinking_config: { thinking_level: 'low', include_thoughts: true } },
+    });
+  });
+
+  it('maps max to high (Gemini 3 Flash has no thinking_level above high)', () => {
+    const request = buildChatRequest({ ...base, kind: 'gemini', reasoningEffort: 'max' }) as Record<
+      string,
+      unknown
+    >;
+    expect(request.extra_body).toEqual({
+      google: { thinking_config: { thinking_level: 'high', include_thoughts: true } },
+    });
+  });
+
+  it('omits thinking_config entirely for the server-default sentinel', () => {
+    const request = buildChatRequest({
+      ...base,
+      kind: 'gemini',
+      reasoningEffort: 'default',
+    }) as Record<string, unknown>;
+    expect('extra_body' in request).toBe(false);
+    expect('reasoning_effort' in request).toBe(false);
+    expect('thinking' in request).toBe(false);
   });
 });
 
@@ -379,29 +480,61 @@ describe('streamReport failover across providers', () => {
     expect(models).toEqual([OR_MODEL, DS_MODEL]);
   });
 
-  it('does NOT fail over after only a THINKING item has streamed (thinking counts as a byte)', async () => {
+  it('DOES fail over after only a THINKING item has streamed (scratch is not the report)', async () => {
     process.env.OPENROUTER_API_KEY = 'sk-or-stub';
     process.env.DEEPSEEK_API_KEY = 'sk-ds-stub';
     process.env.DEEPSEEK_REASONING_EFFORT = 'none';
-    // The primary streams a reasoning delta, then the stream dies. The reader has already
-    // seen that thinking, so switching providers would replay the murmur — no failover.
+    // The primary streams a reasoning delta (ephemeral scratch — never buffered, audited, or
+    // part of the report), then the stream dies before any CONTENT. No report byte has reached
+    // the reader, so the wrapper fails over to DeepSeek; the murmur simply continues from the
+    // next provider. (This is the real-world Gemini failure: it streams the prompted plan, then
+    // its stream truncates before the report — the whole 3-tier chain would be defeated if a
+    // streamed plan blocked failover.)
     byModel = {
       [OR_MODEL]: [{ chunks: [chunk({ reasoning: 'OR thinking, live to the reader. ' }), httpError(500)] }],
       [DS_MODEL]: [{ chunks: success }],
     };
 
+    const items = await collect();
+
+    expect(items.some((i) => i.kind === 'thinking')).toBe(true);
+    expect(items.map((i) => i.text).join('')).toContain('fallback provider');
+    const models = createSpy.mock.calls.map((c) => (c[0] as { model: string }).model);
+    expect(models).toEqual([OR_MODEL, DS_MODEL]);
+  });
+
+  it('fails over from Gemini when the prompted plan streams but NO report content does', async () => {
+    // The exact gemini-3.7-flash failure this fix targets: it streams the start of the PLANNING
+    // PASS (re-tagged as thinking by the prelude splitter), then the stream ends before the
+    // report heading — 0 report content. Only scratch reached the reader, so the wrapper must
+    // fail over to OpenRouter instead of erroring, and the report comes from the fallback.
+    const HEADING = '## How your mind tends to work';
+    const BODY = 'A real report paragraph, long enough to count as content. '.repeat(6);
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.OPENROUTER_API_KEY = 'sk-or-stub';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'prompted';
+    byModel = {
+      // Plan text only, no canonical heading, then the stream simply ends (finish_reason null).
+      [GM_MODEL]: [{ chunks: [chunk({ content: 'PLANNING PASS\n1. Evidence scan, still planning.' })] }],
+      [OR_MODEL]: [{ chunks: [chunk({ content: `${HEADING}\n\n${BODY}` }), chunk({}, 'stop')] }],
+    };
+
     const items: StreamReportItem[] = [];
-    let threw = false;
-    try {
-      for await (const item of streamReport({ system: 'sys', user: 'usr' })) items.push(item);
-    } catch {
-      threw = true;
+    for await (const item of streamReport({
+      system: 'sys',
+      user: 'usr-with-plan',
+      fallbackUser: 'usr-no-plan',
+      reportHeadings: [HEADING],
+    })) {
+      items.push(item);
     }
 
-    expect(threw).toBe(true);
-    expect(items.some((i) => i.kind === 'thinking')).toBe(true);
+    // Gemini's partial plan surfaced as thinking; the report content came from OpenRouter.
+    expect(items.filter((i) => i.kind === 'thinking').map((i) => i.text).join('')).toContain('PLANNING PASS');
+    expect(items.filter((i) => i.kind === 'content').map((i) => i.text).join('')).toContain(HEADING);
     const models = createSpy.mock.calls.map((c) => (c[0] as { model: string }).model);
-    expect(models).toEqual([OR_MODEL]); // DeepSeek was never tried
+    expect(models[0]).toBe(GM_MODEL); // started on Gemini
+    expect(models.at(-1)).toBe(OR_MODEL); // ended on OpenRouter
   });
 
   it('runs prompted mode end to end on the OpenRouter primary: plan split off, reasoning disabled', async () => {
@@ -468,5 +601,90 @@ describe('streamReport failover across providers', () => {
       'HTTP-Referer': 'https://mindstack.example',
     });
     expect(headerSets[1]).toBeUndefined();
+  });
+
+  it('fails over Gemini -> OpenRouter -> DeepSeek across pre-first-byte failures', async () => {
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.OPENROUTER_API_KEY = 'sk-or-stub';
+    process.env.DEEPSEEK_API_KEY = 'sk-ds-stub';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'none';
+    // Gemini and OpenRouter both reject before the first byte (401, non-retryable); DeepSeek,
+    // last in the chain, carries the report. The models on the wire prove the whole order.
+    byModel = {
+      [GM_MODEL]: [{ throws: httpError(401) }],
+      [OR_MODEL]: [{ throws: httpError(401) }],
+      [DS_MODEL]: [{ chunks: success }],
+    };
+
+    const items = await collect();
+
+    expect(items.map((i) => i.text).join('')).toContain('fallback provider');
+    const models = createSpy.mock.calls.map((c) => (c[0] as { model: string }).model);
+    expect(models).toEqual([GM_MODEL, OR_MODEL, DS_MODEL]);
+  });
+
+  it('fails over from Gemini to OpenRouter and stops there when OpenRouter succeeds', async () => {
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.OPENROUTER_API_KEY = 'sk-or-stub';
+    process.env.DEEPSEEK_API_KEY = 'sk-ds-stub';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'none';
+    byModel = {
+      [GM_MODEL]: [{ throws: httpError(401) }],
+      [OR_MODEL]: [{ chunks: success }],
+      [DS_MODEL]: [{ chunks: success }],
+    };
+
+    const items = await collect();
+
+    const models = createSpy.mock.calls.map((c) => (c[0] as { model: string }).model);
+    expect(models).toEqual([GM_MODEL, OR_MODEL]); // DeepSeek never reached
+    expect(items.map((i) => i.text).join('')).toContain('fallback provider');
+  });
+
+  it('does NOT fail over once Gemini has streamed a byte', async () => {
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.OPENROUTER_API_KEY = 'sk-or-stub';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'none';
+    // The primary yields content, then dies on length: a truncated report the reader has
+    // already begun to see. Switching providers would duplicate it.
+    byModel = {
+      [GM_MODEL]: [{ chunks: [chunk({ content: 'half a report' }), chunk({}, 'length')] }],
+      [OR_MODEL]: [{ chunks: success }],
+    };
+
+    await expect(collect()).rejects.toBeTruthy();
+    const models = createSpy.mock.calls.map((c) => (c[0] as { model: string }).model);
+    expect(models).toEqual([GM_MODEL]); // OpenRouter was never tried
+  });
+
+  it('sends the Gemini native thinking_config on the primary attempt (thinking off)', async () => {
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'none';
+    byModel = { [GM_MODEL]: [{ chunks: success }] };
+
+    await collect();
+
+    const body = createSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body.model).toBe(GM_MODEL);
+    expect(body.extra_body).toEqual({
+      google: { thinking_config: { thinking_level: 'low', include_thoughts: false } },
+    });
+    expect('reasoning_effort' in body).toBe(false);
+    expect('thinking' in body).toBe(false);
+  });
+
+  it('constructs the Gemini client at its endpoint with no attribution headers', async () => {
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'none';
+    byModel = { [GM_MODEL]: [{ chunks: success }] };
+
+    await collect();
+
+    const ctorOptions = ctorSpy.mock.calls[0]?.[0] as {
+      baseURL?: string;
+      defaultHeaders?: unknown;
+    };
+    expect(ctorOptions.baseURL).toBe(GEMINI_DEFAULT_BASE_URL);
+    expect(ctorOptions.defaultHeaders).toBeUndefined();
   });
 });

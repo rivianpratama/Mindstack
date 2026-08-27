@@ -43,6 +43,25 @@ export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
  */
 export const OPENROUTER_DEFAULT_MODEL = 'minimax/minimax-m3:free';
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
+/**
+ * Gemini PRIMARY defaults. Gemini exposes an OpenAI-compatible endpoint, so the same SDK
+ * client serves it with a different key, base URL, and model id — the only novelty is the
+ * reasoning dialect (buildChatRequest keys that on the provider `kind`). The default model is
+ * gemini-3.7-flash; override with GEMINI_MODEL / GEMINI_BASE_URL. NOTE: Gemini 3 models cannot
+ * fully disable thinking; the thinking-off path asks for the LOWEST level the model accepts
+ * (see GEMINI_MIN_THINKING_LEVEL) with thoughts hidden — as close to off as the model allows.
+ */
+export const GEMINI_DEFAULT_MODEL = 'gemini-3.7-flash';
+export const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
+/**
+ * The lowest `thinking_level` gemini-3.7-flash accepts. It REJECTS 'minimal' outright —
+ * `400 INVALID_ARGUMENT: "Thinking level MINIMAL is not supported for this model"` (verified
+ * live 2026-08-28, the cause of Gemini failing over on every request) — so 'low' is the floor.
+ * This is the thinking-off level: the least thinking the model allows, with thoughts hidden. If
+ * a future default model accepts 'minimal', lower this. (`reasoning_effort:'none'`, which does
+ * disable thinking, is a Gemini-2.5-only path and is not what this thinking_config route uses.)
+ */
+export const GEMINI_MIN_THINKING_LEVEL = 'low';
 export const TEMPERATURE = 0.5;
 // Total wall-clock budget per attempt. Sized for the native-thinking fallback path: at
 // the deeper efforts ('default'/'max') the model can think for minutes on a large prompt
@@ -173,7 +192,7 @@ const EFFORT_ALIASES: Record<string, DeepSeekReasoningEffort> = {
 };
 
 /** Which upstream a provider talks to; selects the request dialect and the delta fields. */
-export type ProviderKind = 'openrouter' | 'deepseek';
+export type ProviderKind = 'gemini' | 'openrouter' | 'deepseek';
 
 /**
  * A resolved upstream: an OpenAI-compatible endpoint, the model to ask for, and the
@@ -250,14 +269,24 @@ function envKey(name: string): string | undefined {
 }
 
 /**
- * The providers to try, in failover order: OpenRouter first (the free primary) when its
- * key is set, DeepSeek second (the paid fallback) when its key is set. Either may be
+ * The providers to try, in failover order: Gemini first (the primary) when its key is set,
+ * OpenRouter second, DeepSeek third (the paid fallback) when their keys are set. Any may be
  * absent; an empty list means the generator is unconfigured (the route's honest-null path
  * still works with no key at all). Pure over process.env and never throws, so isConfigured()
  * and the stream wrapper read exactly the same truth.
  */
 export function resolveProviders(): Provider[] {
   const providers: Provider[] = [];
+  const geminiKey = envKey('GEMINI_API_KEY');
+  if (geminiKey) {
+    providers.push({
+      name: 'gemini',
+      kind: 'gemini',
+      apiKey: geminiKey,
+      baseURL: process.env.GEMINI_BASE_URL || GEMINI_DEFAULT_BASE_URL,
+      model: process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL,
+    });
+  }
   const openRouterKey = envKey('OPENROUTER_API_KEY');
   if (openRouterKey) {
     providers.push({
@@ -387,14 +416,22 @@ export interface ChatRequestInput {
 
 /**
  * The exact request body, built as a pure function so the reasoning policy is testable
- * without a paid call. The two providers control reasoning with DIFFERENT parameters, so
+ * without a paid call. The three providers control reasoning with DIFFERENT parameters, so
  * the resolved mode is translated per `kind`:
  *   - DeepSeek: the documented `thinking` on/off switch, plus `reasoning_effort` only when
  *     thinking is on AND an explicit level was chosen.
  *   - OpenRouter: its unified `reasoning` object — `{enabled:false}` for the no-native-
  *     thinking paths (none/prompted), `{effort}` for an explicit level, `{enabled:true}`
  *     for the server default. DeepSeek's `thinking` param never rides an OpenRouter call.
- * Both share sampling, streaming, the token cap, and the messages, so those are built once.
+ *   - Gemini: its native `thinking_config`, passed through under a top-level `extra_body`
+ *     (Gemini's own OpenAI-compat escape hatch for provider-specific params). Gemini 3
+ *     CANNOT fully disable thinking, so the thinking-off paths (none/prompted) ask for the
+ *     lowest level the model accepts (GEMINI_MIN_THINKING_LEVEL; gemini-3.7-flash rejects
+ *     'minimal') with thoughts hidden; an explicit level maps to thinking_level (max → high,
+ *     Gemini's ceiling) with thoughts shown; the server default omits the knob.
+ *     Neither `reasoning_effort` (mutually exclusive with thinking_config) nor DeepSeek's
+ *     `thinking`/OpenRouter's `reasoning` ever rides a Gemini call.
+ * All three share sampling, streaming, the token cap, and the messages, so those are built once.
  */
 export function buildChatRequest(input: ChatRequestInput) {
   const effort = resolveReasoningEffort(input.reasoningEffort);
@@ -419,6 +456,22 @@ export function buildChatRequest(input: ChatRequestInput) {
         ? { effort }
         : { enabled: true };
     return { ...common, reasoning };
+  }
+
+  if (input.kind === 'gemini') {
+    // thinking off (none/prompted) → the lowest level the model accepts, thoughts hidden
+    // (gemini-3.7-flash rejects 'minimal'; GEMINI_MIN_THINKING_LEVEL is 'low', its floor); an
+    // explicit level → thinking_level (max → high, the ceiling) with thoughts shown; the server
+    // default (null) → omit thinking_config so Gemini applies its own dynamic thinking.
+    const thinkingConfig = !thinkingOn
+      ? { thinking_level: GEMINI_MIN_THINKING_LEVEL, include_thoughts: false }
+      : effort !== null
+        ? { thinking_level: effort === 'max' ? 'high' : effort, include_thoughts: true }
+        : null;
+    return {
+      ...common,
+      ...(thinkingConfig ? { extra_body: { google: { thinking_config: thinkingConfig } } } : {}),
+    };
   }
 
   return {
@@ -496,12 +549,16 @@ export function classifyStreamOutcome(
 
 /**
  * The failover wrapper and public entry point. Resolves the ordered provider list and
- * delegates each attempt to streamOneProvider, advancing to the next provider ONLY when
- * the inner generator throws before yielding its first item of any kind — the same
- * no-rewind rule the per-provider retry uses, lifted one level. Once anything (thinking or
- * content) has streamed, an inner error propagates unchanged: the reader has already begun
- * to see this provider's output, so switching would duplicate it. With a single configured
- * provider the wrapper is transparent, so the route and the existing tests call it unchanged.
+ * delegates each attempt to streamOneProvider, advancing to the next provider whenever the
+ * inner generator throws before yielding any report CONTENT. Streamed THINKING does not block
+ * failover: the prompted plan and native reasoning murmur are ephemeral scratch — never
+ * buffered, audited, or part of the report — so replaying them from the next provider
+ * duplicates no report. This is deliberate: the primary streams its plan (thinking) before the
+ * report in prompted mode, so gating failover on thinking would defeat the whole chain the
+ * first time the primary truncates mid-plan (the observed gemini-3.7-flash failure). Once a
+ * CONTENT byte has streamed, switching WOULD duplicate the report, so the error propagates
+ * unchanged. With a single configured provider the wrapper is transparent, so the route and the
+ * existing tests call it unchanged.
  */
 export async function* streamReport(request: StreamRequest): AsyncGenerator<StreamReportItem> {
   const providers = resolveProviders();
@@ -523,20 +580,22 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
   for (let i = 0; i < providers.length; i += 1) {
     const provider = providers[i];
     const isLast = i === providers.length - 1;
-    let yielded = false;
+    // Only report CONTENT commits us to a provider. Streamed thinking is scratch and can be
+    // replayed from the next provider without duplicating any report (see the doc comment).
+    let contentYielded = false;
     try {
       for await (const item of streamOneProvider(request, provider)) {
-        yielded = true;
+        if (item.kind === 'content') contentYielded = true;
         yield item;
       }
       return; // this provider carried the report to completion
     } catch (error) {
-      // No rewind: if bytes already reached the reader, or this is the last provider,
+      // No rewind: if report content already reached the reader, or this is the last provider,
       // surface the failure. Otherwise fail over to the next provider in the list.
-      if (yielded || isLast) throw error;
+      if (contentYielded || isLast) throw error;
       const next = providers[i + 1];
       console.error(
-        `[failover] ${provider.name} failed before the first byte; trying ${next.name}: ` +
+        `[failover] ${provider.name} failed before any report content; trying ${next.name}: ` +
           (error instanceof Error ? error.message : String(error)),
       );
     }
