@@ -25,10 +25,10 @@ const base = { model: 'deepseek-v4-flash', system: 'sys', user: 'usr' };
 
 describe('reasoning effort', () => {
   it('defaults to low, the shortest effort DeepSeek documents', () => {
-    // Thinking ON but short. DeepSeek's thinking_mode guide accepts exactly low/high/max;
-    // the old default 'minimal' is not one of them and was SILENTLY ignored upstream
-    // ("will not trigger an error but will also have no effect"), so every request ran at
-    // the server default (high). 'low' is the real shortest level.
+    // Thinking ON but short. DeepSeek's thinking_mode guide documents exactly low/high/max;
+    // the old default 'minimal' is OpenAI vocabulary the API happens to accept (measured
+    // identical to low), but only the documented levels are contractual, so 'low' is the
+    // shortest level worth pinning.
     expect(DEFAULT_REASONING_EFFORT).toBe('low');
     expect(resolveReasoningEffort(undefined)).toBe('low');
     expect(resolveReasoningEffort('')).toBe('low');
@@ -49,16 +49,17 @@ describe('reasoning effort', () => {
   });
 
   it('maps compatibility aliases onto documented levels instead of forwarding them', () => {
-    // DeepSeek ignores unknown effort values without erroring, so forwarding these would
-    // silently run at the server default (high) — the "env var does nothing" defect.
-    expect(resolveReasoningEffort('minimal')).toBe('low'); // this app's pre-fix default
+    // These are valid API variants (the live 400 enum lists OpenAI's full set), but only
+    // low/high/max are in the docs table, so the wire is normalized to those.
+    expect(resolveReasoningEffort('minimal')).toBe('low'); // measured identical to low
     expect(resolveReasoningEffort('medium')).toBe('high'); // DeepSeek's own compat table
     expect(resolveReasoningEffort('xhigh')).toBe('high'); // ditto
   });
 
   it('falls back to the default (low) on an unrecognized value', () => {
-    // A typo falls back to the bounded default; to turn thinking OFF an operator must set
-    // the explicit, recognized value `none`.
+    // A typo falls back to the bounded default — forwarding it would 400 every report
+    // (the API rejects values outside its enum). To turn thinking OFF an operator must
+    // set the explicit, recognized value `none`.
     expect(resolveReasoningEffort('nono')).toBe('low');
     expect(resolveReasoningEffort('true')).toBe('low');
     expect(resolveReasoningEffort('extrahigh')).toBe('low');
@@ -67,8 +68,8 @@ describe('reasoning effort', () => {
 
   it('never resolves to a value DeepSeek does not document', () => {
     // The wire contract: whatever reaches reasoning_effort must be low/high/max, or the
-    // 'none'/null sentinels handled by buildChatRequest. Anything else is silently
-    // dropped upstream and the knob stops working.
+    // 'none'/null sentinels handled by buildChatRequest. Undocumented variants may drift
+    // (they are OpenAI-compat courtesy), and anything outside the enum is a 400.
     const inputs = ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'default', 'typo'];
     for (const input of inputs) {
       const resolved = resolveReasoningEffort(input);
@@ -112,8 +113,9 @@ describe('buildChatRequest', () => {
   });
 
   it('sends only DeepSeek-documented values on the wire, whatever the env says', () => {
-    // Regression for the silent no-op: 'minimal' (the old default) reached the wire and
-    // DeepSeek ignored it, so every report ran at the server default effort (high).
+    // Pins the normalization: only the docs-table levels ever reach the wire, so neither
+    // an undocumented variant drifting upstream nor a typo'd env var (a 400) can break
+    // report generation.
     for (const envValue of ['minimal', 'medium', 'xhigh', 'extrahigh', '', 'low', 'high', 'max']) {
       const request = buildChatRequest({ ...base, reasoningEffort: envValue }) as Record<
         string,
@@ -169,5 +171,25 @@ describe('classifyStreamOutcome', () => {
     expect(
       classifyStreamOutcome({ contentChars: 500, reasoningChars: 0, finishReason: null }),
     ).toBeNull();
+  });
+
+  it('carries a reader-safe public message alongside the operational detail', () => {
+    // The web page is public: `message` (with env-var hints and finish reasons) is for the
+    // server terminal; `publicMessage` is what the route may send to the browser.
+    const empty = classifyStreamOutcome({
+      contentChars: 0,
+      reasoningChars: 31_000,
+      finishReason: 'length',
+    })!;
+    const truncated = classifyStreamOutcome({
+      contentChars: 9_000,
+      reasoningChars: 0,
+      finishReason: 'length',
+    })!;
+    for (const error of [empty, truncated]) {
+      expect(error.publicMessage.length).toBeGreaterThan(0);
+      expect(error.publicMessage).not.toContain('DEEPSEEK');
+      expect(error.publicMessage).not.toContain('finish_reason');
+    }
   });
 });

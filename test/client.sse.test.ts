@@ -31,14 +31,13 @@ const CANNED_STREAM =
  */
 const UNCONFIGURED_STREAM =
   'event: meta\ndata: {"regime":"NORMAL","llm":true}\n\n' +
-  'event: error\ndata: {"message":"The report generator is not configured on this server ' +
-  '(no DEEPSEEK_API_KEY). Your stack signature above is complete and was computed locally; ' +
-  'only the interpreted sections need the model."}\n\n';
+  'event: error\ndata: {"message":"The report generator is not configured on this server. ' +
+  'Your stack signature above is complete and was computed locally; only the interpreted ' +
+  'sections need the model."}\n\n';
 
 const UNCONFIGURED_MESSAGE =
-  'The report generator is not configured on this server (no DEEPSEEK_API_KEY). Your stack ' +
-  'signature above is complete and was computed locally; only the interpreted sections need ' +
-  'the model.';
+  'The report generator is not configured on this server. Your stack signature above is ' +
+  'complete and was computed locally; only the interpreted sections need the model.';
 
 function feed(stream: string, size: number): SseFrame[] {
   const parser = createSseParser();
@@ -272,7 +271,8 @@ describe('generateReport', () => {
   /*
    * Regression: an unconfigured server answers meta -> error -> close. The
    * error is terminal, so no done event ever arrives. The server's message is
-   * the only thing that tells the operator to set DEEPSEEK_API_KEY, so it must
+   * what tells the reader the interpreted sections are unavailable (the which-env-var
+   * detail goes to the server terminal, since the page is public), so it must
    * reach onError intact - and it must be the ONLY onError call, because a
    * second, generic one would replace the card and lose the explanation.
    */

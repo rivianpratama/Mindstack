@@ -155,9 +155,13 @@ describe('POST /api/generate — thinking + content streaming', () => {
     expect(violations.join(' ')).toMatch(/disclaimer/i);
   });
 
-  it('reports the empty-report error path and sends no audit or done', async () => {
+  it('sends a reader-safe error to the page and keeps the detail on the terminal', async () => {
     control.items = [{ kind: 'thinking', text: 'thought a lot, wrote nothing' }];
-    control.error = new DeepSeekEmptyReportError('The report generator returned no report text.');
+    control.error = new DeepSeekEmptyReportError(
+      'The report generator returned no report text. The model spent part of its output ' +
+        'budget on internal reasoning; set DEEPSEEK_REASONING_EFFORT=none to stop that.',
+    );
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const frames = await post(PROFILE_A);
     const events = frames.map((f) => f.event);
@@ -167,9 +171,19 @@ describe('POST /api/generate — thinking + content streaming', () => {
     // ...then a terminal error, and no audit/done after it.
     const error = frames.find((f) => f.event === 'error');
     expect(error).toBeDefined();
-    expect(JSON.parse(error!.data).message).toContain('no report text');
+    // The page is public: no operational detail (env-var names, finish reasons) may reach
+    // it. The full description goes to the server terminal instead.
+    const message = JSON.parse(error!.data).message as string;
+    expect(message.length).toBeGreaterThan(0);
+    expect(message).not.toContain('DEEPSEEK');
+    expect(message).not.toContain('no report text');
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[generate] report stream failed:',
+      expect.stringContaining('DEEPSEEK_REASONING_EFFORT'),
+    );
     expect(events).not.toContain('audit');
     expect(events).not.toContain('done');
+    errorSpy.mockRestore();
   });
 });
 

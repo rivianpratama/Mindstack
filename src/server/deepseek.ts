@@ -55,20 +55,29 @@ export type DeepSeekReasoningEffort = 'low' | 'high' | 'max';
 /**
  * Thinking ON but BOUNDED by default. Per the DeepSeek thinking_mode guide, reasoning is
  * switched with the dedicated `thinking: { type: 'enabled' | 'disabled' }` parameter (see
- * buildChatRequest); `reasoning_effort` is a SEPARATE cap sent alongside it, and its only
- * documented values are `low` / `high` / `max`. An UNKNOWN value is silently ignored
- * ("will not trigger an error but will also have no effect"), and the server default with
- * thinking on is `high` — which is why the old default, OpenAI's `minimal`, never worked:
- * every request quietly ran at `high`. Values are therefore MAPPED here (never forwarded
- * raw), and the default is `low`, the shortest level DeepSeek actually has.
+ * buildChatRequest); `reasoning_effort` is a SEPARATE knob sent alongside it. The docs
+ * table promises `low` / `high` / `max` (and maps `medium`/`xhigh` → `high`); the API's
+ * real accepted enum (from a live 400 message, verified 2026-08-27) is OpenAI's full set —
+ * none/minimal/low/medium/high/xhigh/max — and anything OUTSIDE it is REJECTED with a 400,
+ * so the typo-fallback below is what keeps a bad deploy variable from failing every
+ * report. Values are normalized here to the three documented levels; omitting the knob
+ * means DeepSeek's server default, `high` (verified live via its prompt-scaffolding size:
+ * low/minimal +0, high +79, max +92 prompt tokens on an identical request).
+ *
+ * Effort is a BIAS, not a hard cap: benchmarked live, a hard prompt drove EVERY level
+ * (low included) to spend the entire max_tokens budget thinking and return zero content —
+ * the empty-report case classifyStreamOutcome exists to catch. streamReport therefore
+ * enforces the cap itself (see REPORT_RESERVE_TOKENS): runaway thinking is abandoned
+ * before it can eat the report's share, and the attempt is rerun once with thinking
+ * disabled, so exhaustion never surfaces to the reader as a failure.
  *
  * Control with DEEPSEEK_REASONING_EFFORT. NOTE: tsx watch does NOT reload .env — fully
  * restart `npm run dev:server` after changing it, or the old value stays live.
  *   `none`    → thinking OFF, fastest (~48s), no thinking panel content;
- *   `low`     → shortest thinking (the default here);
+ *   `low`     → shortest thinking (the default here; `minimal` behaves identically);
  *   `high`    → deeper (aliases: `medium`, `xhigh`, per DeepSeek's own compat table);
  *   `max`     → deepest, slowest (can take minutes on a 16k prompt);
- *   `default` → send no cap; DeepSeek's server-side default applies (currently `high`).
+ *   `default` → send no knob; DeepSeek's server-side default applies (currently `high`).
  */
 export const DEFAULT_REASONING_EFFORT: DeepSeekReasoningEffort = 'low';
 
@@ -78,13 +87,28 @@ export const OMIT_REASONING_EFFORT = 'default';
 /** The sentinel that turns thinking OFF (via the `thinking` switch, not an effort). */
 export const DISABLE_REASONING = 'none';
 
-// Every accepted spelling, mapped onto a documented level. Forwarding an unmapped value
-// would be a silent no-op upstream (the "env var does nothing" defect).
+/**
+ * Tokens held back for the report itself. DeepSeek offers no hard thinking cap (effort is
+ * a bias — benchmarked: a hard prompt exhausts any level), so streamReport enforces the
+ * reserve itself: thinking may spend the budget MINUS this, never further. Sized to the
+ * assemble.ts prose budget (~7400 tokens for the largest report) plus slack.
+ */
+export const REPORT_RESERVE_TOKENS = 8000;
+
+/**
+ * Chars-per-token used to estimate thinking spend mid-stream (usage arrives only at the
+ * end). Deliberately LOW (English runs ~4) so the guard fires early, never late.
+ */
+export const THINKING_CHARS_PER_TOKEN = 3;
+
+// Every accepted spelling, mapped onto a documented level. The API 400s on anything
+// outside its enum, and the docs table only promises low/high/max, so normalizing here
+// keeps the wire on documented values whatever the env says.
 const EFFORT_ALIASES: Record<string, DeepSeekReasoningEffort> = {
   low: 'low',
   high: 'high',
   max: 'max',
-  minimal: 'low', // this app's pre-fix default; OpenAI vocabulary, unknown to DeepSeek
+  minimal: 'low', // valid API variant (OpenAI vocabulary); measured identical to low
   medium: 'high', // DeepSeek's compat table maps medium → high
   xhigh: 'high', // ditto
 };
@@ -98,12 +122,23 @@ export interface DeepSeekConfig {
 export class DeepSeekError extends Error {
   readonly status: number | undefined;
   readonly retryable: boolean;
+  /**
+   * Reader-safe wording for the public page. `message` carries the operational detail
+   * (env-var hints, finish reasons, statuses) and is for the server terminal only; the
+   * route must never send it to the browser.
+   */
+  readonly publicMessage: string;
 
-  constructor(message: string, options?: { status?: number; retryable?: boolean }) {
+  constructor(
+    message: string,
+    options?: { status?: number; retryable?: boolean; publicMessage?: string },
+  ) {
     super(message);
     this.name = 'DeepSeekError';
     this.status = options?.status;
     this.retryable = options?.retryable ?? false;
+    this.publicMessage =
+      options?.publicMessage ?? 'The report generator hit a problem. Please try again shortly.';
   }
 }
 
@@ -112,8 +147,8 @@ export class DeepSeekError extends Error {
  * route reports it rather than passing a truncated report off as finished.
  */
 export class DeepSeekTruncatedError extends DeepSeekError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { publicMessage?: string }) {
+    super(message, options);
     this.name = 'DeepSeekTruncatedError';
   }
 }
@@ -123,8 +158,8 @@ export class DeepSeekTruncatedError extends DeepSeekError {
  * reasoning enabled the model can spend the whole budget thinking and emit no content.
  */
 export class DeepSeekEmptyReportError extends DeepSeekError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { publicMessage?: string }) {
+    super(message, options);
     this.name = 'DeepSeekEmptyReportError';
   }
 }
@@ -140,6 +175,11 @@ export function readConfig(): DeepSeekConfig {
     throw new DeepSeekError(
       'The report generator is not configured on this server: DEEPSEEK_API_KEY is unset. ' +
         'Geometry, section 1 and flat-profile reports work without it.',
+      {
+        publicMessage:
+          'The report generator is not configured on this server. Your stack signature ' +
+          'above is complete and was computed locally; only the interpreted sections need it.',
+      },
     );
   }
   return {
@@ -177,9 +217,9 @@ export interface StreamReportItem {
  * Resolve the reasoning setting from the environment. Returns null when the parameter must
  * be omitted entirely, so DeepSeek's own default (`high`) applies.
  *
- * An unrecognized value falls back to the default rather than being forwarded: DeepSeek
- * ignores unknown values without erroring, so a typo in a deploy variable would otherwise
- * silently run every report at the server default.
+ * An unrecognized value falls back to the default rather than being forwarded: the API
+ * rejects values outside its enum with a 400 invalid_request_error, so a typo in a deploy
+ * variable would otherwise fail every report outright.
  */
 export function resolveReasoningEffort(
   raw?: string | null,
@@ -252,6 +292,11 @@ export function classifyStreamOutcome(outcome: StreamOutcome): DeepSeekError | n
       'The report generator returned no report text.' +
         spentThinking +
         ' Nothing was written, so there is nothing to show; please try again.',
+      {
+        publicMessage:
+          'The report generator finished without writing any report text. ' +
+          'Nothing was lost; please try again.',
+      },
     );
   }
 
@@ -261,6 +306,11 @@ export function classifyStreamOutcome(outcome: StreamOutcome): DeepSeekError | n
         `(finish_reason "length") after about ${Math.round(outcome.contentChars / 6)} words.` +
         spentThinking +
         ' What you can see above is real, but the closing sections are missing.',
+      {
+        publicMessage:
+          'The report was cut off before it finished. What you can see above is real, ' +
+          'but the closing sections are missing. Please try again.',
+      },
     );
   }
 
@@ -284,6 +334,13 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
   // first item reaches the client), not the SDK's default of two silent replays.
   const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL, maxRetries: 0 });
 
+  const maxTokens = request.maxTokens ?? MAX_COMPLETION_TOKENS;
+  // Thinking may spend at most the budget minus the report's reserve, estimated in chars
+  // because usage arrives only after the stream ends.
+  const runawayChars = Math.max(0, maxTokens - REPORT_RESERVE_TOKENS) * THINKING_CHARS_PER_TOKEN;
+  // One-shot: after the fallback, thinking is off, so a second exhaustion cannot happen.
+  let exhaustionFallback = false;
+
   let attempt = 0;
   for (;;) {
     attempt += 1;
@@ -302,11 +359,14 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
           system: request.system,
           user: request.user,
           ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
-          reasoningEffort: process.env.DEEPSEEK_REASONING_EFFORT,
+          reasoningEffort: exhaustionFallback
+            ? DISABLE_REASONING
+            : process.env.DEEPSEEK_REASONING_EFFORT,
         }),
         { signal },
       );
 
+      let runaway = false;
       for await (const chunk of stream) {
         const choice = chunk.choices?.[0];
         if (!choice) continue;
@@ -321,6 +381,14 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
           reasoningChars += reasoning.length;
           yielded = true;
           yield { kind: 'thinking', text: reasoning };
+          // NO FAILURE FROM EXHAUSTION: if thinking is about to eat the report's reserve
+          // and no content exists yet, abandon this attempt (breaking closes the upstream
+          // stream) and rerun without thinking, instead of dying on `length` with an
+          // empty report the reader would have to pay to retry.
+          if (!exhaustionFallback && contentChars === 0 && reasoningChars > runawayChars) {
+            runaway = true;
+            break;
+          }
         }
 
         const delta = choice.delta?.content;
@@ -331,8 +399,27 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
         }
       }
 
+      if (runaway) {
+        exhaustionFallback = true;
+        console.error(
+          `[deepseek] reasoning spent ~${Math.round(reasoningChars / THINKING_CHARS_PER_TOKEN)} ` +
+            `of the ${maxTokens}-token budget with no report text yet; ` +
+            'retrying once with thinking disabled.',
+        );
+        continue;
+      }
+
       const outcome = classifyStreamOutcome({ contentChars, reasoningChars, finishReason });
-      if (outcome) throw outcome;
+      if (outcome) {
+        // The other exhaustion shape: the stream ended (typically on `length`) having
+        // written no content at all. Same remedy, same one-shot fallback.
+        if (outcome instanceof DeepSeekEmptyReportError && !exhaustionFallback) {
+          exhaustionFallback = true;
+          console.error(`[deepseek] ${outcome.message} Retrying once with thinking disabled.`);
+          continue;
+        }
+        throw outcome;
+      }
       return;
     } catch (error) {
       const failure = describe(error, timeout.signal.aborted);
@@ -365,9 +452,10 @@ function composeSignals(a: AbortSignal, b?: AbortSignal): AbortSignal {
  */
 function describe(error: unknown, timedOut: boolean): DeepSeekError {
   if (timedOut) {
+    const publicMessage = 'The report generator took too long to respond. Try again.';
     return new DeepSeekError(
       `The report generator did not respond within ${TIMEOUT_MS / 1000} seconds. Try again.`,
-      { retryable: false },
+      { retryable: false, publicMessage },
     );
   }
 
@@ -380,33 +468,37 @@ function describe(error: unknown, timedOut: boolean): DeepSeekError {
     return new DeepSeekError(
       'The report generator rejected this server\'s credentials. This is a server-side ' +
         'configuration problem, not something you can fix.',
-      { status, retryable: false },
+      {
+        status,
+        retryable: false,
+        publicMessage: 'The report generator is unavailable right now. Please try again later.',
+      },
     );
   }
   if (status === 429) {
-    return new DeepSeekError('The report generator is rate-limited right now. Try again shortly.', {
-      status,
-      retryable: true,
-    });
+    // Already reader-safe: no statuses, no configuration detail.
+    const message = 'The report generator is rate-limited right now. Try again shortly.';
+    return new DeepSeekError(message, { status, retryable: true, publicMessage: message });
   }
   if (typeof status === 'number' && Number.isFinite(status) && status >= 500) {
-    return new DeepSeekError('The report generator is having trouble upstream. Try again shortly.', {
-      status,
-      retryable: true,
-    });
+    const message = 'The report generator is having trouble upstream. Try again shortly.';
+    return new DeepSeekError(message, { status, retryable: true, publicMessage: message });
   }
   if (error instanceof DeepSeekError) return error;
 
   const name = error instanceof Error ? error.name : '';
   if (name === 'AbortError') {
-    return new DeepSeekError('The report request was cancelled.', { retryable: false });
+    const message = 'The report request was cancelled.';
+    return new DeepSeekError(message, { retryable: false, publicMessage: message });
   }
 
   // Network-layer failure with no HTTP status: DNS, TCP reset, TLS, connection refused.
   // These are usually transient, so allow the pre-stream retry loop to try again before
   // surfacing the error to the reader.
-  return new DeepSeekError(
-    'The report generator could not be reached. Try again shortly.',
-    { ...(typeof status === 'number' && Number.isFinite(status) ? { status } : {}), retryable: true },
-  );
+  const message = 'The report generator could not be reached. Try again shortly.';
+  return new DeepSeekError(message, {
+    ...(typeof status === 'number' && Number.isFinite(status) ? { status } : {}),
+    retryable: true,
+    publicMessage: message,
+  });
 }

@@ -9,7 +9,10 @@
  *   chunk    {"text":string}  repeated: report markdown for sections 2-6
  *   audit    {"violations":string[]}   once, after generation
  *   done     {}
- *   error    {"message":string}  on upstream failure; terminal, replaces audit+done
+ *   error    {"message":string}  on upstream failure; terminal, replaces audit+done.
+ *            The message is reader-safe: the page is public, so operational detail
+ *            (env-var names, finish reasons, statuses) is logged to the server terminal
+ *            and never sent over the wire.
  *
  * `meta` is first; `thinking` and `chunk` events follow and may interleave (reasoning
  * usually precedes content, but the client handles either order).
@@ -33,7 +36,7 @@ import {
 import { validateScores } from '../../shared/validation';
 import { assemblePrompt } from '../prompt/assemble';
 import { auditReport, ensureDisclaimer } from '../guards';
-import { isConfigured, streamReport } from '../deepseek';
+import { DeepSeekError, isConfigured, streamReport } from '../deepseek';
 
 interface GenerateBody {
   scores?: unknown;
@@ -115,13 +118,15 @@ generateRoute.post('/generate', async (c) => {
     }
 
     if (!isConfigured()) {
+      // The operator hint (which env var) belongs on the terminal; the page is public.
+      console.error('[generate] DEEPSEEK_API_KEY is unset; the interpreted sections need it.');
       await stream.writeSSE({
         event: 'error',
         data: JSON.stringify({
           message:
-            'The report generator is not configured on this server (no DEEPSEEK_API_KEY). ' +
-            'Your stack signature above is complete and was computed locally; only the ' +
-            'interpreted sections need the model.',
+            'The report generator is not configured on this server. Your stack signature ' +
+            'above is complete and was computed locally; only the interpreted sections ' +
+            'need the model.',
         }),
       });
       return;
@@ -148,6 +153,8 @@ generateRoute.post('/generate', async (c) => {
         await stream.writeSSE({ event: 'chunk', data: JSON.stringify({ text: item.text }) });
       }
     } catch (error) {
+      // Full description to the terminal; only the reader-safe wording to the (public) page.
+      console.error('[generate] report stream failed:', detailFor(error));
       await stream.writeSSE({
         event: 'error',
         data: JSON.stringify({ message: messageFor(error) }),
@@ -181,7 +188,14 @@ function chunkText(text: string): string[] {
   return pieces.filter((piece) => piece.length > 0);
 }
 
+/** Reader-safe wording for the public page; never the raw error message. */
 function messageFor(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
+  if (error instanceof DeepSeekError) return error.publicMessage;
   return 'The report generator failed unexpectedly. Try again shortly.';
+}
+
+/** The full operational description, for the server terminal only. */
+function detailFor(error: unknown): string {
+  if (error instanceof Error) return error.stack ?? error.message;
+  return String(error);
 }
