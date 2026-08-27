@@ -46,11 +46,10 @@ app.get('/api/health', (c) =>
 app.route('/api', generateRoute);
 
 /*
- * In production the client is a built Vite bundle in ./dist; in dev, Vite serves it and
- * proxies /api here, so mounting the static handler would only shadow a directory that
- * may not exist yet.
+ * In production (standalone Node), the client is a built Vite bundle in ./dist; in dev, Vite
+ * serves it and proxies /api here. On Vercel, static assets are served by Vercel's CDN.
  */
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
   app.use('/*', serveStatic({ root: './dist' }));
   app.get('*', serveStatic({ path: './dist/index.html' }));
 }
