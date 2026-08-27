@@ -30,6 +30,14 @@ import { createPreludeSplitter } from './prelude';
 
 export const DEFAULT_MODEL = 'deepseek-v4-flash';
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
+/**
+ * OpenRouter primary defaults. The free deepseek-v4-flash slug is the intended primary;
+ * DeepSeek direct (above) is the paid fallback. Both endpoints are OpenAI-compatible, so
+ * the same SDK client serves either with a different key, base URL, and model id — only
+ * the reasoning dialect differs (buildChatRequest keys that on the provider `kind`).
+ */
+export const OPENROUTER_DEFAULT_MODEL = 'deepseek/deepseek-v4-flash:free';
+export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 export const TEMPERATURE = 0.5;
 // Total wall-clock budget per attempt. Sized for the native-thinking fallback path: at
 // the deeper efforts ('default'/'max') the model can think for minutes on a large prompt
@@ -159,6 +167,21 @@ const EFFORT_ALIASES: Record<string, DeepSeekReasoningEffort> = {
   xhigh: 'high', // ditto
 };
 
+/** Which upstream a provider talks to; selects the request dialect and the delta fields. */
+export type ProviderKind = 'openrouter' | 'deepseek';
+
+/**
+ * A resolved upstream: an OpenAI-compatible endpoint, the model to ask for, and the
+ * dialect (`kind`) to speak. resolveProviders() returns these in failover order.
+ */
+export interface Provider {
+  name: string;
+  kind: ProviderKind;
+  apiKey: string;
+  baseURL: string;
+  model: string;
+}
+
 export interface DeepSeekConfig {
   apiKey: string;
   baseURL: string;
@@ -212,7 +235,58 @@ export class DeepSeekEmptyReportError extends DeepSeekError {
 
 /** Whether a live call is possible at all. The route checks this before promising one. */
 export function isConfigured(): boolean {
-  return typeof process.env.DEEPSEEK_API_KEY === 'string' && process.env.DEEPSEEK_API_KEY !== '';
+  return resolveProviders().length > 0;
+}
+
+/** An env var counts as set only when it is a non-empty string. */
+function envKey(name: string): string | undefined {
+  const value = process.env[name];
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * The providers to try, in failover order: OpenRouter first (the free primary) when its
+ * key is set, DeepSeek second (the paid fallback) when its key is set. Either may be
+ * absent; an empty list means the generator is unconfigured (the route's honest-null path
+ * still works with no key at all). Pure over process.env and never throws, so isConfigured()
+ * and the stream wrapper read exactly the same truth.
+ */
+export function resolveProviders(): Provider[] {
+  const providers: Provider[] = [];
+  const openRouterKey = envKey('OPENROUTER_API_KEY');
+  if (openRouterKey) {
+    providers.push({
+      name: 'openrouter',
+      kind: 'openrouter',
+      apiKey: openRouterKey,
+      baseURL: process.env.OPENROUTER_BASE_URL || OPENROUTER_DEFAULT_BASE_URL,
+      model: process.env.OPENROUTER_MODEL || OPENROUTER_DEFAULT_MODEL,
+    });
+  }
+  const deepSeekKey = envKey('DEEPSEEK_API_KEY');
+  if (deepSeekKey) {
+    providers.push({
+      name: 'deepseek',
+      kind: 'deepseek',
+      apiKey: deepSeekKey,
+      baseURL: process.env.DEEPSEEK_BASE_URL || DEFAULT_BASE_URL,
+      model: process.env.DEEPSEEK_MODEL || DEFAULT_MODEL,
+    });
+  }
+  return providers;
+}
+
+/**
+ * Attribution headers OpenRouter uses for its free-tier ranking. Optional and harmless:
+ * X-Title defaults to the app name, HTTP-Referer is sent only when configured.
+ */
+function openRouterHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    'X-Title': process.env.OPENROUTER_APP_TITLE || 'Mindstack',
+  };
+  const referer = envKey('OPENROUTER_APP_URL');
+  if (referer) headers['HTTP-Referer'] = referer;
+  return headers;
 }
 
 export function readConfig(): DeepSeekConfig {
@@ -302,32 +376,53 @@ export interface ChatRequestInput {
   user: string;
   maxTokens?: number;
   reasoningEffort?: string | null;
+  /** Which dialect to speak. Defaults to DeepSeek so pre-failover callers are unchanged. */
+  kind?: ProviderKind;
 }
 
 /**
- * The exact request body, built as a pure function so the reasoning-effort policy is
- * testable without a paid call.
+ * The exact request body, built as a pure function so the reasoning policy is testable
+ * without a paid call. The two providers control reasoning with DIFFERENT parameters, so
+ * the resolved mode is translated per `kind`:
+ *   - DeepSeek: the documented `thinking` on/off switch, plus `reasoning_effort` only when
+ *     thinking is on AND an explicit level was chosen.
+ *   - OpenRouter: its unified `reasoning` object — `{enabled:false}` for the no-native-
+ *     thinking paths (none/prompted), `{effort}` for an explicit level, `{enabled:true}`
+ *     for the server default. DeepSeek's `thinking` param never rides an OpenRouter call.
+ * Both share sampling, streaming, the token cap, and the messages, so those are built once.
  */
 export function buildChatRequest(input: ChatRequestInput) {
   const effort = resolveReasoningEffort(input.reasoningEffort);
-  // 'none' and 'prompted' both turn thinking OFF ('prompted' reasons in the content
-  // stream instead); a level, or null for the server default, turns it ON via the
-  // documented `thinking` switch.
+  // 'none' and 'prompted' both turn thinking OFF ('prompted' reasons in the content stream
+  // instead); a level, or null for the server default, turns it ON.
   const thinkingOn = effort !== DISABLE_REASONING && effort !== PROMPTED_REASONING;
-  return {
+  const common = {
     model: input.model,
     temperature: TEMPERATURE,
     stream: true as const,
     max_tokens: input.maxTokens ?? MAX_COMPLETION_TOKENS,
+    messages: [
+      { role: 'system' as const, content: input.system },
+      { role: 'user' as const, content: input.user },
+    ],
+  };
+
+  if (input.kind === 'openrouter') {
+    const reasoning = !thinkingOn
+      ? { enabled: false }
+      : effort !== null
+        ? { effort }
+        : { enabled: true };
+    return { ...common, reasoning };
+  }
+
+  return {
+    ...common,
     // The DeepSeek-documented on/off switch for hybrid reasoning.
     thinking: { type: thinkingOn ? ('enabled' as const) : ('disabled' as const) },
     // A cap is sent ONLY when thinking is on AND an explicit level was chosen; unbounded
     // (null) sends no cap, so the model decides how much to think.
     ...(thinkingOn && effort !== null ? { reasoning_effort: effort } : {}),
-    messages: [
-      { role: 'system' as const, content: input.system },
-      { role: 'user' as const, content: input.user },
-    ],
   };
 }
 
@@ -395,7 +490,56 @@ export function classifyStreamOutcome(
 }
 
 /**
- * Streams the completion as tagged items (see `StreamReportItem`).
+ * The failover wrapper and public entry point. Resolves the ordered provider list and
+ * delegates each attempt to streamOneProvider, advancing to the next provider ONLY when
+ * the inner generator throws before yielding its first item of any kind — the same
+ * no-rewind rule the per-provider retry uses, lifted one level. Once anything (thinking or
+ * content) has streamed, an inner error propagates unchanged: the reader has already begun
+ * to see this provider's output, so switching would duplicate it. With a single configured
+ * provider the wrapper is transparent, so the route and the existing tests call it unchanged.
+ */
+export async function* streamReport(request: StreamRequest): AsyncGenerator<StreamReportItem> {
+  const providers = resolveProviders();
+  if (providers.length === 0) {
+    // Defensive: the route guards with isConfigured() first, so this is only reachable if a
+    // caller skips that check. Same shape of failure as readConfig's not-configured error.
+    throw new DeepSeekError(
+      'The report generator is not configured on this server: neither OPENROUTER_API_KEY ' +
+        'nor DEEPSEEK_API_KEY is set. Geometry, section 1 and flat-profile reports work ' +
+        'without it.',
+      {
+        publicMessage:
+          'The report generator is not configured on this server. Your stack signature ' +
+          'above is complete and was computed locally; only the interpreted sections need it.',
+      },
+    );
+  }
+
+  for (let i = 0; i < providers.length; i += 1) {
+    const provider = providers[i];
+    const isLast = i === providers.length - 1;
+    let yielded = false;
+    try {
+      for await (const item of streamOneProvider(request, provider)) {
+        yielded = true;
+        yield item;
+      }
+      return; // this provider carried the report to completion
+    } catch (error) {
+      // No rewind: if bytes already reached the reader, or this is the last provider,
+      // surface the failure. Otherwise fail over to the next provider in the list.
+      if (yielded || isLast) throw error;
+      const next = providers[i + 1];
+      console.error(
+        `[failover] ${provider.name} failed before the first byte; trying ${next.name}: ` +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+}
+
+/**
+ * Streams one provider's completion as tagged items (see `StreamReportItem`).
  *
  * One retry, and only on 429 or 5xx, and only before the first item has reached the client
  * : once anything (thinking or content) has streamed there is nothing to rewind, and a
@@ -403,15 +547,23 @@ export function classifyStreamOutcome(
  *
  * Two sources feed the `thinking` items, never the report buffer that guards and the
  * disclaimer see:
- *   - `reasoning_content` deltas (native-thinking fallback path), surfaced and counted;
+ *   - reasoning deltas — `reasoning_content` (DeepSeek) or `reasoning` (OpenRouter),
+ *     surfaced and counted;
  *   - in prompted mode, the planning pass: content deltas before the first canonical
  *     heading, re-tagged by the prelude splitter (see prelude.ts and reportHeadings).
  */
-export async function* streamReport(request: StreamRequest): AsyncGenerator<StreamReportItem> {
-  const config = readConfig();
+async function* streamOneProvider(
+  request: StreamRequest,
+  provider: Provider,
+): AsyncGenerator<StreamReportItem> {
   // maxRetries: 0. The retry policy is the one below (exactly one, and only before the
   // first item reaches the client), not the SDK's default of two silent replays.
-  const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL, maxRetries: 0 });
+  const client = new OpenAI({
+    apiKey: provider.apiKey,
+    baseURL: provider.baseURL,
+    maxRetries: 0,
+    ...(provider.kind === 'openrouter' ? { defaultHeaders: openRouterHeaders() } : {}),
+  });
 
   const maxTokens = request.maxTokens ?? MAX_COMPLETION_TOKENS;
   // Thinking may spend at most the budget minus the report's reserve, estimated in chars
@@ -441,7 +593,8 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
     try {
       const stream = await client.chat.completions.create(
         buildChatRequest({
-          model: config.model,
+          model: provider.model,
+          kind: provider.kind,
           system: request.system,
           // The prompted fallback swaps the prompt (plan instructions stripped) instead
           // of the thinking switch, which is already off on that path.
@@ -463,10 +616,19 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
 
         // Hybrid-reasoning field, not in the SDK's types: surface it as `thinking`, and
         // count it toward reasoningChars (never contentChars, so it can't mask an empty
-        // report). Any item on the wire counts as `yielded`: a retry would replay it.
-        const reasoning = (choice.delta as { reasoning_content?: unknown } | undefined)
-          ?.reasoning_content;
-        if (typeof reasoning === 'string' && reasoning.length > 0) {
+        // report). DeepSeek names it `reasoning_content`; OpenRouter normalizes the same
+        // stream to `reasoning`. Read either, so neither provider's reasoning is dropped.
+        // Any item on the wire counts as `yielded`: a retry would replay it.
+        const deltaObj = choice.delta as
+          | { reasoning_content?: unknown; reasoning?: unknown }
+          | undefined;
+        const reasoning =
+          typeof deltaObj?.reasoning_content === 'string' && deltaObj.reasoning_content.length > 0
+            ? deltaObj.reasoning_content
+            : typeof deltaObj?.reasoning === 'string' && deltaObj.reasoning.length > 0
+              ? deltaObj.reasoning
+              : '';
+        if (reasoning.length > 0) {
           reasoningChars += reasoning.length;
           yielded = true;
           yield { kind: 'thinking', text: reasoning };

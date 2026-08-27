@@ -3462,7 +3462,11 @@ function deriveThresholds(options) {
     balanced: B,
     leaning: 2 * B,
     polarized: 4 * B,
-    flatSpread: 2 * B,
+    // FLAT only when differences the noise band could fully erase are all there is.
+    // The former 2B gate was relaxed (02 §2 step 0): spreads in (B, 2B] now generate,
+    // carrying the NEAR-FLAT low-confidence warning instead of the honest null.
+    flatSpread: B,
+    lowSpread: 2 * B,
     moderateSpread: 4 * B,
     circuit: B,
     sealedCircuit: 2 * B,
@@ -3542,12 +3546,17 @@ function analyzeTiers(scores, options) {
   let regime = "NORMAL";
   if (spread <= t.flatSpread) regime = "FLAT";
   else if (!anyCut) regime = "STAIRCASE";
+  if (regime !== "FLAT" && spread <= t.lowSpread) {
+    warnings.push(
+      `NEAR-FLAT: spread ${spread} is at most two noise bands (<= ${t.lowSpread}). Every reading here rests on differences close to the quiz's noise floor, so the whole report is low-confidence: say so plainly near the start, hedge every claim, and expect a retake to reshuffle the order.`
+    );
+  }
   const emptyTiers = { lead: [], support: [], reserve: [], shadow: [] };
   const noTierOf = Object.fromEntries(order2.map((fn) => [fn, null]));
   if (regime === "FLAT") {
     const largest = gaps.reduce((best, gap) => gap.value > best.value ? gap : best, gaps[0]);
     warnings.push(
-      `FLAT regime: spread ${spread} is within the noise band's reach (<= ${t.flatSpread}). No tiers asserted; weak signal must be stated plainly rather than interpreted.`
+      `FLAT regime: the whole profile fits inside one noise band (spread ${spread} <= ${t.flatSpread}). No tiers asserted; weak signal must be stated plainly rather than interpreted.`
     );
     return {
       regime,
@@ -3830,11 +3839,11 @@ function computeIndices(input) {
   };
   let diffClass;
   let diffBorderline = false;
-  if (spread <= t.flatSpread) {
+  if (spread <= t.lowSpread) {
     diffClass = "low";
   } else if (spread <= t.moderateSpread) {
     diffClass = "moderate";
-    diffBorderline = isBorderlinePast(spread, t.flatSpread);
+    diffBorderline = isBorderlinePast(spread, t.lowSpread);
   } else {
     diffClass = "high";
     diffBorderline = isBorderlinePast(spread, t.moderateSpread);
@@ -17270,8 +17279,8 @@ var foundations_default = {
       "05-report-generation.md (already in system-prompt.ts)",
       "KNOWN-ISSUES.md (QA log)"
     ],
-    chars: 164830,
-    approxTokens: 41208
+    chars: 172171,
+    approxTokens: 43043
   },
   text: `# PART A: FOUNDATIONS (cognitive-function theory; background reference)
 
@@ -17354,8 +17363,8 @@ One canonical definition per term. The component in parentheses owns the term; o
 - **Judging/perceiving pressure** : fires from the composition of the active set (all-judging \u2192 judging pressure; all-perceiving \u2192 perceiving pressure; mixed \u2192 no fire, hedged note at most); the (\u03A3J \u2212 \u03A3P) index is context only. (community idea, generalized by Mindstack)
 - **Differentiation index** : max minus min of the eight scores; low values are weak signal. (Mindstack hypothesis)
 - **Elevation** : mean of the eight scores; never interpreted as ability, health, or development. (Mindstack hypothesis)
-- **FLAT regime / honest-null rule** : differentiation \u2264 2B: weak signal reported as weak signal, never filled with invented content; takes precedence over every other shape. [H, motivated by Forer 1949 (established science)]
-- **STAIRCASE regime** : no adjacent gap exceeds B but differentiation > 2B: no tier boundaries; only upper-vs-lower-edge extremes are interpretable. (Mindstack hypothesis)
+- **FLAT regime / honest-null rule** : differentiation \u2264 B: weak signal reported as weak signal, never filled with invented content; takes precedence over every other shape. Differentiation in (B, 2B] is the NEAR-FLAT low-confidence zone: the report proceeds, flagged. [H, motivated by Forer 1949 (established science)]
+- **STAIRCASE regime** : no adjacent gap exceeds B but differentiation > B: no tier boundaries; only upper-vs-lower-edge extremes are interpretable. (Mindstack hypothesis)
 - **Shape taxonomy (S1\u2013S12 + S3b)** : lead spike (graded marginal / clear / hard), twin peak, pluralistic lead cluster, pluralistic sub-cluster, compressed top, staircase, flat, cliff floor, bimodal split (hollow middle), polarized axis, balanced-high axis, balanced-low axis, single-attitude lead (circuit candidate). (02 \xA74)
 - **Pluralistic sub-cluster (S3b)** : three or more functions mutually within one noise band forming the upper edge below a marginal lead boundary (or of a smeared lead); the licensed detection for "near-lead" clusters ; always watch-item grade. (Mindstack hypothesis)
 - **Counterweight** : relative to a single-attitude lead, the highest-scoring opposite-attitude function: the profile's built-in exit ramp; reports name it and its activation conditions. (Mindstack hypothesis)
@@ -17636,11 +17645,18 @@ INPUT: s[f] for f \u2208 {Ni,Ne,Si,Se,Ti,Te,Fi,Fe};  B = 5
 
 0  REGIME CHECK (weak signal first; see \xA74 S5/S6 and \xA76):
      diff = max \u2212 min of the eight scores
-     diff \u2264 2B                         \u2192 FLAT (S6): honest null. No tiers are
+     diff \u2264 B                          \u2192 FLAT (S6): honest null. No tiers are
                                           asserted, even if a boundary technically
                                           exists; the single largest gap may be
                                           named only as a tentative watch item.
-     no adjacent gap > B AND diff > 2B \u2192 STAIRCASE (S5): one segment, no tier
+     B < diff \u2264 2B                     \u2192 NEAR-FLAT low-confidence zone [H]: proceed
+                                          with the steps below (the regime stays
+                                          STAIRCASE or NORMAL), but attach a warning ;
+                                          every reading rests on differences the noise
+                                          band could erase, the report must say so
+                                          plainly near its start, and no length
+                                          minimum applies (05 \xA75.1).
+     no adjacent gap > B AND diff > B  \u2192 STAIRCASE (S5): one segment, no tier
                                           boundaries; only upper-vs-lower-edge
                                           contrasts are interpretable.
      otherwise                         \u2192 continue.
@@ -17684,7 +17700,7 @@ All sums below use \u03A3all = sum of the eight scores; E = {Ne, Se, Te, Fe}, I 
 - **Attitude tilt** = (\u03A3E \u2212 \u03A3I) / \u03A3all, range \u22121\u2026+1. Thresholds: |tilt| \u2264 .05 neutral, \u2264 .15 mild, > .15 strong; values within 20% past a cutoff carry a "borderline" qualifier per \xA72.2 [H cutoffs]. Interpretation: the profile's outward/inward processing metabolism [D : attitude as energy direction, per mbti-notes], explicitly **not** sociability or shyness [D : the source is emphatic on this].
 - **Axis polarization**, per opposing pair (Ni\u2013Se, Ne\u2013Si, Ti\u2013Fe, Te\u2013Fi): pol = |a \u2212 b|. The five-way scale, consumed verbatim by 03 \xA77: **balanced** if pol \u2264 B, sub-classified by pair mean vs. profile mean into **balanced-high** and **balanced-low**; **leaning** if B < pol \u2264 2B; **polarized** if 2B < pol \u2264 4B; **extreme** if pol > 4B. Interpretations live in the taxonomy (S9\u2013S11).
 - **Judging/perceiving pressure.** The index (\u03A3J \u2212 \u03A3P) / \u03A3all (tilt's thresholds (Mindstack hypothesis)) is context only. The diagnostic is the **composition check on the active set** (\xA72 step 7): all-judging active set \u2192 judging pressure; all-perceiving \u2192 perceiving pressure; mixed \u2192 no pressure dynamic fires, and at most one hedged composition note (e.g., "judging-heavy, 3 J : 1 P") may be rendered (Mindstack hypothesis). All-judging: conclusions may outrun data-gathering; all-perceiving: intake without closure [D : both failure modes described by the source's J/P closure mechanics].
-- **Differentiation index** = S[0] \u2212 S[7] (the spread). Low if \u2264 2B (the FLAT regime), moderate if \u2264 4B, high above that [H cutoffs]. **Hard honesty rule:** low differentiation is a weak signal, and the report must say so plainly rather than invent content. A flat profile rendered as a rich portrait is a Barnum failure by construction [S: Forer 1949 : identical sketches rate as highly accurate].
+- **Differentiation index** = S[0] \u2212 S[7] (the spread). Low if \u2264 2B (the NEAR-FLAT low-confidence zone; the FLAT honest-null fires only at \u2264 B, \xA72 step 0), moderate if \u2264 4B, high above that [H cutoffs]. **Hard honesty rule:** low differentiation is a weak signal, and the report must say so plainly rather than invent content. A flat profile rendered as a rich portrait is a Barnum failure by construction [S: Forer 1949 : identical sketches rate as highly accurate].
 - **Elevation** = mean of the eight scores. Never interpreted as overall ability, health, or development; elevation plausibly reflects self-report response style as much as psychology (Mindstack hypothesis). Used only to contextualize the all-high/all-low edge cases.
 
 ## 4. Shape taxonomy
@@ -17701,9 +17717,9 @@ Thirteen recurring signature shapes. Detection is arithmetic; interpretations ar
 
 **S4 \xB7 Compressed top.** *Detect:* |Lead| \u2265 4. *Hypotheses:* prioritization filters not strongly set ; breadth of engagement bought at the cost of a default mode [H, inverting the source's efficiency-filter economics (community idea, unvalidated)]; or elevated, undifferentiated self-report. *Not:* mastery of four-plus functions. *Marker:* difficulty naming a single characteristic first move; an obvious signature first reach falsifies the face reading.
 
-**S5 \xB7 Staircase.** *Detect:* regime STAIRCASE (\xA72 step 0: no adjacent gap > B, differentiation > 2B). *Hypotheses:* gradual differentiation without discrete tiers; or measurement smear. *Not:* an eight-rung ladder ; no adjacent rank is real. *Marker:* only extreme contrasts (upper vs. lower edge) should ring true; if even top-vs-bottom contrasts don't, the profile carries no usable signal and the report says so. Report behavior: extremes-only (03 \xA79, 05 \xA75.5).
+**S5 \xB7 Staircase.** *Detect:* regime STAIRCASE (\xA72 step 0: no adjacent gap > B, differentiation > B). *Hypotheses:* gradual differentiation without discrete tiers; or measurement smear. *Not:* an eight-rung ladder ; no adjacent rank is real. *Marker:* only extreme contrasts (upper vs. lower edge) should ring true; if even top-vs-bottom contrasts don't, the profile carries no usable signal and the report says so. Report behavior: extremes-only (03 \xA79, 05 \xA75.5).
 
-**S6 \xB7 Flat.** *Detect:* regime FLAT (differentiation \u2264 2B) ; takes precedence over **all** other shapes; when it holds, no other shape is rendered even if a boundary technically exists. *Interpretation:* weak signal ; honest null [hard rule]. Offered hypotheses only: genuinely even engagement, undifferentiated self-knowledge, or neutral/careless responding [D ; the source catalogs self-report failure modes]. *Not:* "you are balanced and adaptable" ; a Barnum item that flatters everyone and differentiates no one. *Marker:* none derivable ; which is exactly the sentence the report must contain. Report schema: 05 \xA75.1 and \xA75.5.
+**S6 \xB7 Flat.** *Detect:* regime FLAT (differentiation \u2264 B) ; takes precedence over **all** other shapes; when it holds, no other shape is rendered even if a boundary technically exists. *Interpretation:* weak signal ; honest null [hard rule]. Offered hypotheses only: genuinely even engagement, undifferentiated self-knowledge, or neutral/careless responding [D ; the source catalogs self-report failure modes]. *Not:* "you are balanced and adaptable" ; a Barnum item that flatters everyone and differentiates no one. *Marker:* none derivable ; which is exactly the sentence the report must contain. Report schema: 05 \xA75.1 and \xA75.5.
 
 **S7 \xB7 Cliff floor.** *Detect:* |Shadow| = 1 and the final gap > 2B (marginal cliff if \u2264 2.4B, per \xA72.2). *Hypotheses ; hold all three* (Mindstack hypothesis): suppression (active repression, predicting eruptive return [D\u2192H ; Quenk's grip, via mbti-notes, re-keyed to gap-derived floors]); avoidance (the domain is feared or devalued [D ; the source's contrarian-influence principle: a repressed function still shapes the worldview through what gets disowned, disavowed, or defined as unimportant]); simple non-development (never practiced, no drama). *Not:* incapacity, and never a diagnosis. *Marker:* suppression predicts crude, out-of-character eruptions in that domain under fatigue or stress; non-development predicts plain absence without eruption ; which one the reader recognizes discriminates the hypotheses. Smooth handling of the domain under stress falsifies all three.
 
@@ -17728,7 +17744,7 @@ Thirteen recurring signature shapes. Detection is arithmetic; interpretations ar
 
 Other edge cases:
 
-- **All-high** (elevation \u2265 37.5): interpret shape only; elevation is confounded with response style (Mindstack hypothesis). If differentiation is also \u2264 2B, FLAT governs.
+- **All-high** (elevation \u2265 37.5): interpret shape only; elevation is confounded with response style (Mindstack hypothesis). If differentiation is also \u2264 B, FLAT governs.
 - **All-low** (elevation \u2264 12.5): same shape-only rule; hypotheses include disengaged or self-effacing responding and low self-clarity (Mindstack hypothesis). Never read low elevation as deficiency or distress : no diagnosis.
 - **FLAT / STAIRCASE:** see \xA72 step 0 and S5/S6. FLAT \u2192 the honest-null report (05 \xA75.1 flat schema): state that the instrument returned little structure, suggest a retest or the finer-grained 256-item Domains test, and generate **no** trait content. STAIRCASE \u2192 extremes-only reporting.
 - **Multiple cliffs (\u2265 2):** a stratified profile. Each cliff is a separate interpretable feature; treat each isolated lower tier on its own terms and never rank functions inside any tier.
@@ -18881,7 +18897,7 @@ Generator rules:
 
 # Output format
 
-Markdown, exactly the six headings the user message specifies, in its report language and order. Nothing before the first heading \u2014 except the planning pass when, and only when, the user message explicitly asks for one \u2014 and nothing after the disclaimer: no preamble, no meta-commentary, no section 1, no closing pleasantry.`;
+Markdown, exactly the six headings the user message specifies, in its report language and order. Nothing before the first heading \u2014 except the single \`# \` headline line when the user message asks for one, and except the planning pass when, and only when, the user message explicitly asks for one \u2014 and nothing after the disclaimer: no preamble, no meta-commentary, no section 1, no closing pleasantry.`;
 var SYSTEM_PROMPT_WORDS = SYSTEM_PROMPT.trim().split(/\s+/).length;
 
 // src/server/prompt/foundations.ts
@@ -19426,7 +19442,8 @@ function assemblePrompt(signature, _context, language = DEFAULT_REPORT_LANGUAGE)
   const fragmentKeys = selection.keys();
   const fragments = resolve(fragmentKeys);
   const budgetWords = renderPlan.reduce((sum, feature) => sum + feature.budgetWords, 0);
-  const minWords = signature.regime === "NORMAL" ? MIN_REPORT_WORDS : 0;
+  const nearFlat = signature.indices.differentiation.class === "low";
+  const minWords = signature.regime === "NORMAL" && !nearFlat ? MIN_REPORT_WORDS : 0;
   const prompted = activeReasoningMode() === PROMPTED_REASONING;
   const promptInput = {
     signature,
@@ -19450,7 +19467,10 @@ function assemblePrompt(signature, _context, language = DEFAULT_REPORT_LANGUAGE)
     systemPrompt: fullSystemPrompt(),
     userPrompt: buildUserPrompt({ ...promptInput, plan: prompted }),
     userPromptNoPlan: prompted ? buildUserPrompt({ ...promptInput, plan: false }) : null,
-    reportHeadings: [...headingsFor(language)],
+    // '# ' first: the headline line opens the report, so the prelude splitter treats it
+    // as the plan/report boundary. Safe as a bare prefix because plan lines are forbidden
+    // from starting with '#' (PLANNING_PASS_INSTRUCTIONS).
+    reportHeadings: ["# ", ...headingsFor(language)],
     // Output budget (~2.2 tokens/word + slack) PLUS a reasoning allowance sized to the
     // active mode (reasoning bills against the same max_tokens as the report): a wide one
     // for native thinking, a small one for the capped prompted plan, none for `none`.
@@ -19942,7 +19962,7 @@ var PLANNING_PASS_INSTRUCTIONS = [
   "5. ADVERSARIAL PASS. Attack your own plan the way the audit will. For each planned claim: would the OPPOSITE profile (lead and floor swapped) accept it as accurate? Then it says nothing \u2014 sharpen it until it discriminates, or drop it. Which credited strength still lacks a cost tied to the SAME feature? Which section still lacks its falsifiable prediction with a counter-observation? Is any tie about to be ranked, any marginal feature about to be stated one-sidedly, any grade word, number, or two-letter code about to leak into report prose? Fix each problem here, in the plan, where it is one line \u2014 not in the report, where it is a rewrite.",
   "6. ARC AND CLOSE. State the through-line in one sentence: the one thing this signature is about, which every section should serve. Then: which composition anchors section 2; which experiment in section 5 tests which named hypothesis from sections 2-4 (every lever must trace back to one); and how section 7 names the limits without taking back what the report actually said.",
   'Plan budget: 500-900 words, never more than 1200. Spend the depth on stages 3 and 5. Plain prose lines and list numbers only: no markdown headings, no line starting with "#". Codes, grades, internal terms and figures ARE allowed in the plan (it is private and is not the report). Write the plan in English whatever language the report is written in.',
-  'Then write the report, starting directly at the first canonical heading. The report must stand alone: never refer to the plan, never write "as planned" or "as noted above".'
+  'Then write the report, starting directly at the headline line (`# `), followed by the first canonical heading. The report must stand alone: never refer to the plan, never write "as planned" or "as noted above".'
 ];
 var GROUP_TITLES = {
   shapes: "Shapes (02 \xA74 hypotheses, detection and grades stripped; grades come from the Signature above)",
@@ -20058,7 +20078,11 @@ function buildUserPrompt(input) {
     out.push("");
   }
   out.push(
-    "Write Sections 2\u20137 ONLY. Section 1 is rendered client-side from the Signature above; do not restate it. Use EXACTLY these markdown headings, in this order, with nothing " + (plan ? "before the first one except the planning pass described above " : "before the first one ") + "(the client matches these strings to render its cards):"
+    "HEADLINE. The report's very first line is exactly one line of the form `# <headline>` (one `#`, one space), followed by a blank line, then the first canonical heading. Write it the way a front-page newspaper headline is written: one short declarative sentence that captures the whole report's central finding about this person, so specific that a different profile would need a different headline. Plain everyday words, at most twelve words, written in the report's language. Never a number, a score, a grade word, a two-letter habit code, or a type label; no colon, no em-dash, no quotation marks; never a restatement of a section heading; the client renders it as the report's title."
+  );
+  out.push("");
+  out.push(
+    "Write Sections 2\u20137 ONLY. Section 1 is rendered client-side from the Signature above; do not restate it. Use EXACTLY these markdown headings, in this order, with nothing before the first one except " + (plan ? "the planning pass described above and " : "") + "the single headline line (the client matches these strings to render its cards):"
   );
   out.push("");
   for (const heading of headingsFor(language)) out.push(`- \`${heading}\``);
