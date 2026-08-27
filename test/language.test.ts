@@ -2,7 +2,7 @@
  * The report-language contract, both halves:
  *
  *  - EQUIVALENCE: the Indonesian surface is structurally the same report as the
- *    English one - same six headings in the same order, same disclaimer claims,
+ *    English one - same five headings in the same order, same disclaimer claims,
  *    same honest-null facts - so the client's cards and the guards work
  *    identically in either language.
  *
@@ -24,7 +24,6 @@ import {
   buildHonestNullReportId,
   DISCLAIMER_ID,
   disclaimerFor,
-  FRAMEWORK_PROVENANCE_TEXT_ID,
   headingsFor,
   languageDirective,
   REPORT_HEADINGS_EN,
@@ -90,10 +89,10 @@ describe('report-language wire contract', () => {
  * ------------------------------------------------------------------ */
 
 describe('headings, both languages', () => {
-  it('keeps the English set canonical and six long in each language', () => {
+  it('keeps the English set canonical and five long in each language', () => {
     expect(REPORT_HEADINGS).toEqual(REPORT_HEADINGS_EN);
-    expect(REPORT_HEADINGS_EN).toHaveLength(6);
-    expect(REPORT_HEADINGS_ID).toHaveLength(6);
+    expect(REPORT_HEADINGS_EN).toHaveLength(5);
+    expect(REPORT_HEADINGS_ID).toHaveLength(5);
     expect(headingsFor('en')).toEqual(REPORT_HEADINGS_EN);
     expect(headingsFor('id')).toEqual(REPORT_HEADINGS_ID);
   });
@@ -296,16 +295,13 @@ describe('FLAT honest-null, Indonesian', () => {
     expect(report).toBe(buildHonestNullReportId(sigFlat));
   });
 
-  it('carries both canonical Indonesian headings, in report order', () => {
-    expect(report.indexOf('## Dari mana laporan ini berasal')).toBeGreaterThanOrEqual(0);
-    expect(report.indexOf('## Dari mana laporan ini berasal')).toBeLessThan(
-      report.indexOf('## Apa yang tidak bisa dikatakan laporan ini'),
-    );
-    expect(report).toContain(FRAMEWORK_PROVENANCE_TEXT_ID);
+  it('drops the provenance heading and leads with the Indonesian limits heading', () => {
+    expect(report).not.toContain('## Dari mana laporan ini berasal');
+    expect(report.indexOf('## Apa yang tidak bisa dikatakan laporan ini')).toBeGreaterThanOrEqual(0);
   });
 
-  it('translates the same facts the English null report states', () => {
-    for (const fact of [
+  it('drops the provenance facts but keeps its licensed content', () => {
+    for (const gone of [
       'mbti-notes.tumblr.com',
       'Type Spotting',
       'Quenk',
@@ -313,11 +309,12 @@ describe('FLAT honest-null, Indonesian', () => {
       'Reynierse',
       'Mischel dan Shoda',
       'Fleeson',
-      '256 pertanyaan',
     ]) {
-      expect(report).toContain(fact);
+      expect(report).not.toContain(gone);
     }
-    // The one licensed structure: the single largest gap, as a hedged watch item.
+    // Still points to the longer test, and still names the one licensed structure
+    // (the single largest gap) as a hedged watch item.
+    expect(report).toContain('256 pertanyaan');
     expect(report).toContain('bisa jadi hanya kebetulan');
   });
 

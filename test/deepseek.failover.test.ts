@@ -134,8 +134,13 @@ describe('resolveProviders', () => {
     });
   });
 
-  it('defaults the OpenRouter model to the free deepseek-v4-flash', () => {
-    expect(OPENROUTER_DEFAULT_MODEL).toBe('deepseek/deepseek-v4-flash:free');
+  it('defaults the OpenRouter model to the best available free option (minimax-m3)', () => {
+    // The originally-intended deepseek-v4-flash:free was retired by OpenRouter (404: "This
+    // model is unavailable for free... use deepseek/deepseek-v4-flash" — the paid slug). No
+    // DeepSeek :free variant remains, so the primary is the strongest FREE model that stays
+    // available and follows instructions (plain language, no em-dashes, en/id); DeepSeek
+    // direct is the paid fallback for when the free tier rate-limits.
+    expect(OPENROUTER_DEFAULT_MODEL).toBe('minimax/minimax-m3:free');
     expect(OPENROUTER_DEFAULT_BASE_URL).toBe('https://openrouter.ai/api/v1');
   });
 
@@ -267,6 +272,24 @@ describe('streamReport failover across providers', () => {
 
     const models = createSpy.mock.calls.map((c) => (c[0] as { model: string }).model);
     expect(models.filter((m) => m === OR_MODEL).length).toBe(3); // MAX_ATTEMPTS
+    expect(models.at(-1)).toBe(DS_MODEL);
+    expect(items.map((i) => i.text).join('')).toContain('fallback provider');
+  });
+
+  it('treats a 404 (retired/unknown model) as non-retryable and fails over immediately', async () => {
+    process.env.OPENROUTER_API_KEY = 'sk-or-stub';
+    process.env.DEEPSEEK_API_KEY = 'sk-ds-stub';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'none';
+    // A retired slug 404s; retrying the same dead model 3x just delays the handoff.
+    byModel = {
+      [OR_MODEL]: [{ throws: httpError(404) }],
+      [DS_MODEL]: [{ chunks: success }],
+    };
+
+    const items = await collect();
+
+    const models = createSpy.mock.calls.map((c) => (c[0] as { model: string }).model);
+    expect(models.filter((m) => m === OR_MODEL).length).toBe(1); // one attempt, no retry
     expect(models.at(-1)).toBe(DS_MODEL);
     expect(items.map((i) => i.text).join('')).toContain('fallback provider');
   });

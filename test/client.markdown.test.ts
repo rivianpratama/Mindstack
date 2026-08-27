@@ -162,24 +162,23 @@ describe('section splitting', () => {
     expect(parts[2].body.trim()).toBe('Try this.');
   });
 
-  it('carries all six contract sections, in the server ordering', () => {
+  it('carries all five contract sections, in the server ordering', () => {
     expect(SECTION_TITLES).toEqual([
       'How your mind tends to work',
       'How you handle different situations',
       'When things get stressful',
       'Things you can try',
-      'Where this report comes from',
       "What this report can't tell you",
     ]);
     // The old section-3 heading is gone from the contract.
     expect(SECTION_TITLES).not.toContain('Where you are right now');
     expect(matchSectionTitle('## Where you are right now')).toBeNull();
-    // The provenance section sits between Things you can try and the limits section.
-    expect(SECTION_TITLES.indexOf('Where this report comes from')).toBe(
-      SECTION_TITLES.indexOf('Things you can try') + 1,
-    );
+    // The provenance section was removed; it is no longer a card the client renders.
+    expect(SECTION_TITLES).not.toContain('Where this report comes from');
+    expect(matchSectionTitle('## Where this report comes from')).toBeNull();
+    // The limits section now follows Things you can try directly.
     expect(SECTION_TITLES.indexOf("What this report can't tell you")).toBe(
-      SECTION_TITLES.indexOf('Where this report comes from') + 1,
+      SECTION_TITLES.indexOf('Things you can try') + 1,
     );
   });
 });
@@ -188,7 +187,7 @@ describe('couldContinueHeading', () => {
   it('withholds a heading that has only half arrived', () => {
     expect(couldContinueHeading('#')).toBe(true);
     expect(couldContinueHeading('## When thing')).toBe(true);
-    expect(couldContinueHeading('## Where this report comes f')).toBe(true);
+    expect(couldContinueHeading('## What this report can')).toBe(true);
     // Two headings now begin "How ", and both share "How you" - an
     // ambiguous prefix must be withheld until it resolves.
     expect(couldContinueHeading('## How ')).toBe(true);
@@ -225,7 +224,7 @@ describe('couldContinueHeading', () => {
  * Incremental splitting (what the streaming view actually runs on)
  * ------------------------------------------------------------------ */
 
-/** A full six-section report, ~2200 words, as the server will now stream it. */
+/** A full five-section report, ~2200 words, as the server will now stream it. */
 function longReport(): string {
   const words = (n: number, salt: number) =>
     Array.from({ length: n }, (_, i) => `w${salt}x${i}`).join(' ');
@@ -233,7 +232,7 @@ function longReport(): string {
   SECTION_TITLES.forEach((title, s) => {
     parts.push(`\n## ${title}\n\n`);
     for (let p = 0; p < 8; p += 1) {
-      parts.push(`**Prediction:** ${words(40, s * 10 + p)}. [H]\n\n`);
+      parts.push(`**Prediction:** ${words(52, s * 10 + p)}. [H]\n\n`);
     }
     parts.push(`- one ${words(6, s)}\n- two ${words(6, s + 1)}\n\n`);
   });
@@ -242,17 +241,16 @@ function longReport(): string {
 }
 
 describe('createSectionSplitter', () => {
-  const SIX_SECTION_STREAM =
+  const FIVE_SECTION_STREAM =
     'intro\n' +
     SECTION_TITLES.map((title) => `## ${title}\nbody of ${title}.\n`).join('');
 
   it('produces one section per heading, in order, plus the preamble', () => {
-    const { final } = stream(SIX_SECTION_STREAM, 7);
+    const { final } = stream(FIVE_SECTION_STREAM, 7);
     expect(final.map((s) => s.title)).toEqual([null, ...SECTION_TITLES]);
-    expect(final).toHaveLength(7);
-    expect(final[5].title).toBe('Where this report comes from');
-    expect(final[5].body.trim()).toBe('body of Where this report comes from.');
-    expect(final[6].title).toBe("What this report can't tell you");
+    expect(final).toHaveLength(6);
+    expect(final[5].title).toBe("What this report can't tell you");
+    expect(final[5].body.trim()).toBe("body of What this report can't tell you.");
   });
 
   it('agrees with the batch splitter at every chunk size', () => {
@@ -289,7 +287,7 @@ describe('createSectionSplitter', () => {
    * The performance contract, asserted structurally rather than by clock: a
    * drain reports at most the section in flight plus the one just sealed above
    * it, and a sealed section is never reported again. Re-rendering the whole
-   * report on every chunk - the thing this replaced - would put all seven
+   * report on every chunk - the thing this replaced - would put all five
    * sections in every drain.
    */
   it('reports at most two changed sections per chunk, and never re-reports a sealed one', () => {

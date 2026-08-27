@@ -14,7 +14,6 @@ import {
   assemblePrompt,
   computeScenarios,
   DEMAND_WEIGHTING_RULE,
-  FRAMEWORK_PROVENANCE_TEXT,
   MIN_REPORT_WORDS,
   REPORT_HEADINGS,
   TARGET_REPORT_WORDS,
@@ -224,7 +223,7 @@ describe('profile A render plan (05 §5.1 salience and caps)', () => {
   it('attaches the depth contract to every full-length profile feature', () => {
     for (const f of assemblyA.renderPlan) {
       if (f.mode !== 'full' && f.mode !== 'fork') continue;
-      if (f.kind === 'provenance' || f.kind === 'scenarios') continue;
+      if (f.kind === 'scenarios') continue;
       const text = f.instructions.join(' ');
       expect(text, `${f.id} is missing the depth contract`).toContain('Depth contract');
       expect(text).toContain('predicts that none of them predicts alone');
@@ -400,14 +399,12 @@ describe('FLAT regime → honest null, no fragments, no LLM', () => {
     expect(assemblyFlat.maxTokens).toBe(0);
   });
 
-  it('still explains the framework, so a flat report is substantial without lying', () => {
+  it('drops the provenance section: straight to the limits, no framework essay', () => {
     const report = assemblyFlat.honestNullReport ?? '';
-    // Both canonical headings, in report order, so the client's cards still match.
-    expect(report.indexOf('## Where this report comes from')).toBeGreaterThanOrEqual(0);
-    expect(report.indexOf('## Where this report comes from')).toBeLessThan(
-      report.indexOf("## What this report can't tell you"),
-    );
-    expect(report).toContain(FRAMEWORK_PROVENANCE_TEXT);
+    // The dedicated provenance section is gone; the limits heading is the only one now.
+    expect(report).not.toContain('## Where this report comes from');
+    expect(report.indexOf("## What this report can't tell you")).toBeGreaterThanOrEqual(0);
+    // The provenance-only facts leave with the section; attribution rides the disclaimer.
     for (const fact of [
       'mbti-notes.tumblr.com',
       'Type Spotting',
@@ -416,16 +413,10 @@ describe('FLAT regime → honest null, no fragments, no LLM', () => {
       'Reynierse',
       'Mischel and Shoda',
       'Fleeson',
-      'hobby quiz',
     ]) {
-      expect(report).toContain(fact);
+      expect(report).not.toContain(fact);
     }
-    // Explaining the method is not a claim about the reader: still no trait content.
-    expect(FRAMEWORK_PROVENANCE_TEXT).not.toContain('you likely');
-    expect(auditReport(FRAMEWORK_PROVENANCE_TEXT).filter((v) => !v.includes('disclaimer'))).toEqual(
-      [],
-    );
-    expect(report.split(/\s+/).length).toBeGreaterThan(600);
+    expect(report).toContain('untested personality-community writing');
   });
 
   it('carries a deterministic report with the verbatim disclaimer and no trait content', () => {
@@ -464,8 +455,8 @@ describe('STAIRCASE regime → weak signal only', () => {
       'always.development',
       'always.state-honesty',
     ]);
-    // The weak-signal feature plus the framework-provenance section, and nothing else.
-    expect(assembly.renderPlan.map((f) => f.id)).toEqual(['weak-signal:staircase', 'provenance']);
+    // Just the weak-signal feature: provenance is no longer a planned section.
+    expect(assembly.renderPlan.map((f) => f.id)).toEqual(['weak-signal:staircase']);
     expect(assembly.renderPlan[0]!.instructions.join(' ')).toContain('the habits you use most');
     expect(assembly.renderPlan[0]!.instructions.join(' ')).toContain('the honest output is SHORT');
     // No bands resolve, so no demand can be graded: no scenarios, and section 3 says so.
@@ -494,11 +485,11 @@ describe('user prompt hygiene', () => {
     expect(signatureBlock).toContain('PRIVATE EVIDENCE');
   });
 
-  it('names the six headings, in order, and ends with the disclaimer', () => {
+  it('names the five headings, in order, and ends with the disclaimer', () => {
     const positions = REPORT_HEADINGS.map((heading) => assemblyA.userPrompt.indexOf(heading));
     expect(positions.every((position) => position > 0)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
-    expect(assemblyA.userPrompt).toContain('Write Sections 2–7 ONLY');
+    expect(assemblyA.userPrompt).toContain('Write Sections 2–6 ONLY');
     expect(hasDisclaimer(assemblyA.userPrompt)).toBe(true);
   });
 
@@ -593,18 +584,21 @@ describe('prompted reasoning (the default): plan scripted in the prompt', () => 
     // The retry prompt ships ALONE, so its render-instruction tail must be complete —
     // the prefix equality above cannot catch a plan:false branch dropping any of this.
     expect(noPlan).toContain('Report language: ENGLISH');
-    expect(noPlan).toContain('Write Sections 2–7 ONLY');
+    expect(noPlan).toContain('Write Sections 2–6 ONLY');
     for (const heading of REPORT_HEADINGS) expect(noPlan).toContain(`\`${heading}\``);
     expect(hasDisclaimer(noPlan)).toBe(true);
     expect(noPlan).toContain(`Total allocated budget: ~${prompted.budgetWords} words`);
   });
 
-  it('exposes the headline prefix plus the canonical headings for the prelude splitter, per language', () => {
-    expect(assembleWith(undefined).reportHeadings).toEqual(['# ', ...REPORT_HEADINGS]);
+  it('exposes only the canonical headings for the prelude splitter, per language', () => {
+    // The `# ` headline line is deliberately absent: the splitter treats it as a
+    // conditional boundary internally, and listing it here once reclassified a
+    // misplaced plan as report content.
+    expect(assembleWith(undefined).reportHeadings).toEqual([...REPORT_HEADINGS]);
     const id = assemblePrompt(sigA, null, 'id');
-    expect(id.reportHeadings[0]).toBe('# ');
-    expect(id.reportHeadings[1]).toBe('## Cara pikiranmu biasanya bekerja');
-    expect(id.reportHeadings).toHaveLength(7);
+    expect(id.reportHeadings[0]).toBe('## Cara pikiranmu biasanya bekerja');
+    expect(id.reportHeadings).toHaveLength(5);
+    expect(id.reportHeadings).not.toContain('# ');
   });
 
   it('sizes the headroom to the mode: native wide, prompted small, none nothing', () => {
@@ -682,7 +676,7 @@ describe('system prompt composition', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Comprehensive format: length contract, depth, and the provenance section
+ * Comprehensive format: length contract and depth
  * ------------------------------------------------------------------ */
 
 describe('comprehensive format — length contract', () => {
@@ -737,52 +731,36 @@ describe('comprehensive format — length contract', () => {
   });
 });
 
-describe('section 6 — "Where this report comes from"', () => {
-  it('names the exact heading, after Things you can try and before the limits section', () => {
-    expect(REPORT_HEADINGS).toHaveLength(6);
-    expect(REPORT_HEADINGS[4]).toBe('## Where this report comes from');
-    expect(REPORT_HEADINGS.indexOf('## Where this report comes from')).toBe(
-      REPORT_HEADINGS.indexOf('## Things you can try') + 1,
-    );
+describe('provenance — removed as a section, kept as grounding', () => {
+  it('has five headings, ending in the limits section right after Things you can try', () => {
+    expect(REPORT_HEADINGS).toHaveLength(5);
+    expect(REPORT_HEADINGS).not.toContain('## Where this report comes from');
+    expect(REPORT_HEADINGS[4]).toBe("## What this report can't tell you");
     expect(REPORT_HEADINGS.indexOf("## What this report can't tell you")).toBe(
-      REPORT_HEADINGS.indexOf('## Where this report comes from') + 1,
+      REPORT_HEADINGS.indexOf('## Things you can try') + 1,
     );
   });
 
-  it('is a planned feature on every LLM path, in section 6', () => {
+  it('plans no provenance feature on any LLM path', () => {
     const staircase = assemblePrompt(
       computeSignature({ Ni: 40, Te: 36, Ti: 32, Fi: 28, Ne: 24, Se: 20, Si: 16, Fe: 12 }),
       null,
     );
     for (const assembly of [assemblyA, assemblyB, assemblyMixed, staircase]) {
-      const provenance = feature(assembly.renderPlan, 'provenance');
-      expect(provenance.section).toBe(6);
-      expect(provenance.kind).toBe('provenance');
-      expect(provenance.budgetWords).toBe(400);
-      expect(provenance.functions).toEqual([]);
+      expect(assembly.renderPlan.find((f) => f.id === 'provenance')).toBeUndefined();
+      // 'provenance' is no longer even a FeatureKind, so the type system guarantees the rest.
     }
   });
 
-  it('carries the provenance facts, with the right epistemic tiers', () => {
-    const text = feature(assemblyA.renderPlan, 'provenance').instructions.join(' ');
-    expect(text).toContain('300-500 words');
-    for (const source of ['Type Fundamentals', 'Function Theory', 'Type Development', 'Type Spotting']) {
-      expect(text).toContain(source);
-    }
-    expect(text).toContain('mbti-notes.tumblr.com');
-    expect(text).toContain('Quenk');
-    expect(text).toContain('16 fixed types');
-    expect(text).toContain('40,320');
-    expect(text).toContain('Reynierse 2009');
-    expect(text).toContain('Mischel and Shoda (1995)');
-    expect(text).toContain('Fleeson (2001)');
-    expect(text).toContain('hobby quiz');
-    // The section explains the method; it must make no claim about the person.
-    expect(text).toContain('nothing about the person');
+  it('keeps framework provenance as grounding and folds a short note into the limits section', () => {
+    // The dedicated 300-500 word section is gone, but the model still learns where the
+    // method comes from, and section 6 (the limits) now carries the brief attribution note.
+    expect(SYSTEM_PROMPT).toContain('# Framework provenance');
+    expect(SYSTEM_PROMPT).toContain('where this came from');
   });
 
-  it('tells the model to write sections 2–7 with the exact headings', () => {
-    expect(assemblyA.userPrompt).toContain('Write Sections 2–7 ONLY');
+  it('tells the model to write sections 2–6 with the exact headings', () => {
+    expect(assemblyA.userPrompt).toContain('Write Sections 2–6 ONLY');
     for (const heading of REPORT_HEADINGS) {
       expect(assemblyA.userPrompt).toContain(`\`${heading}\``);
     }

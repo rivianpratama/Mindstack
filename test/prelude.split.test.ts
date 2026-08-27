@@ -90,11 +90,11 @@ describe('prelude splitter, boundary finding', () => {
     expect(content).toBe(`${REPORT_HEADINGS_ID[0]}\n\nIsi laporan.`);
   });
 
-  it('matches any of the six headings as the boundary, not only the first', () => {
+  it('matches any of the five headings as the boundary, not only the first', () => {
     // A STAIRCASE report legitimately starts at a later section's heading.
-    const { thinking, content } = run(['short plan\n', `${REPORT_HEADINGS_EN[4]}\n\nProvenance.`]);
+    const { thinking, content } = run(['short plan\n', `${REPORT_HEADINGS_EN[4]}\n\nLimits.`]);
     expect(thinking).toBe('short plan\n');
-    expect(content).toBe(`${REPORT_HEADINGS_EN[4]}\n\nProvenance.`);
+    expect(content).toBe(`${REPORT_HEADINGS_EN[4]}\n\nLimits.`);
   });
 });
 
@@ -155,27 +155,67 @@ describe('prelude splitter, streaming liveness', () => {
   });
 });
 
-describe('the headline line as the boundary (reportHeadings gains "# ")', () => {
-  const WITH_HEADLINE = ['# ', ...REPORT_HEADINGS_EN];
-
-  it('starts content at the headline line, before any canonical heading', () => {
-    const { thinking, content } = run(
-      ['plan line\n# A Mind That Checks Twice\n\n', `${HEADING}\n\nBody.`],
-      WITH_HEADLINE,
-    );
+describe('the headline line (single "# "): a conditional boundary, never an unconditional one', () => {
+  it('opens the report when it directly precedes the first canonical heading', () => {
+    const { thinking, content } = run([
+      'plan line\n# A Mind That Checks Twice\n\n',
+      `${HEADING}\n\nBody.`,
+    ]);
     expect(thinking).toBe('plan line\n');
     expect(content).toBe(`# A Mind That Checks Twice\n\n${HEADING}\n\nBody.`);
   });
 
-  it('holds a bare "#" until the next delta resolves it into the headline', () => {
-    const { thinking, content } = run(['plan\n#', ' A Headline\nrest'], WITH_HEADLINE);
+  it('holds a bare "#" until later deltas resolve it into the headline', () => {
+    const { thinking, content } = run(['plan\n#', ' A Headline\n\n', `${HEADING}\nrest`]);
     expect(thinking).toBe('plan\n');
-    expect(content).toBe('# A Headline\nrest');
+    expect(content).toBe(`# A Headline\n\n${HEADING}\nrest`);
   });
 
-  it('still splits at a canonical heading when the model skips the headline', () => {
-    const { thinking, content } = run(['plan\n', `${HEADING}\n\nBody.`], WITH_HEADLINE);
+  it('re-tags an early headline (written before the plan) as thinking, then replays it at the boundary', () => {
+    // THE bug this rule exists for: a model that leads with the headline must not get
+    // its whole plan reclassified as report content (murmur empty, plan on the page).
+    const { thinking, content } = run([
+      '# Steady Hands, Small Gaps\n\n1. EVIDENCE SCAN: near-flat spread.\n2. more plan\n',
+      `${HEADING}\n\nBody.`,
+    ]);
+    expect(thinking).toContain('# Steady Hands, Small Gaps\n');
+    expect(thinking).toContain('EVIDENCE SCAN');
+    expect(content).toBe(`# Steady Hands, Small Gaps\n\n${HEADING}\n\nBody.`);
+  });
+
+  it('prefers the headline adjacent to the heading over an earlier stray one', () => {
+    const { thinking, content } = run([
+      '# Early Draft Title\nplan\n# Final Title\n',
+      `${HEADING}\nBody.`,
+    ]);
+    expect(thinking).toBe('# Early Draft Title\nplan\n');
+    expect(content).toBe(`# Final Title\n${HEADING}\nBody.`);
+  });
+
+  it('never treats a mid-line "# " as a headline', () => {
+    const { thinking, content } = run(['weighing option # 2 for the lead\n', `${HEADING}\nBody.`]);
+    expect(thinking).toBe('weighing option # 2 for the lead\n');
+    expect(content).toBe(`${HEADING}\nBody.`);
+  });
+
+  it('tags a held partial headline as thinking when the stream ends without a report', () => {
+    const splitter = createPreludeSplitter(REPORT_HEADINGS_EN);
+    expect(splitter.push('plan\n# Title Without A Report')).toEqual([
+      { kind: 'thinking', text: 'plan\n' },
+    ]);
+    expect(splitter.flush()).toEqual([{ kind: 'thinking', text: '# Title Without A Report' }]);
+    expect(splitter.contentStarted).toBe(false);
+  });
+
+  it('tags a completed headline as thinking when nothing follows it', () => {
+    const splitter = createPreludeSplitter(REPORT_HEADINGS_EN);
+    expect(splitter.push('plan\n# Title Line\n')).toEqual([{ kind: 'thinking', text: 'plan\n' }]);
+    expect(splitter.flush()).toEqual([{ kind: 'thinking', text: '# Title Line\n' }]);
+  });
+
+  it('drip-feeds through headline, blank line and boundary one character at a time', () => {
+    const { thinking, content } = run(`plan\n# T\n\n${HEADING}\nBody.`.split(''));
     expect(thinking).toBe('plan\n');
-    expect(content).toBe(`${HEADING}\n\nBody.`);
+    expect(content).toBe(`# T\n\n${HEADING}\nBody.`);
   });
 });

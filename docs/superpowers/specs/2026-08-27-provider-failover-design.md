@@ -1,6 +1,27 @@
-# Provider failover: OpenRouter primary, DeepSeek fallback
+# Provider failover: Gemini primary, OpenRouter second, DeepSeek fallback
 
 Date: 2026-08-27. Status: approved in conversation.
+
+> **Order changed (2026-08-27):** Gemini is now the PRIMARY, OpenRouter second, DeepSeek
+> third. The body below describes the original two-provider (OpenRouter → DeepSeek) design
+> and still holds for those two; the Gemini addition and the new ordering are specified in
+> the final amendment, "## Amendment (2026-08-27): Gemini added as primary (3-tier failover)".
+
+## Amendment (2026-08-27, live test): primary model changed to minimax-m3
+
+The intended primary `deepseek/deepseek-v4-flash:free` does not exist. A live probe with the
+configured key returned `404: "This model is unavailable for free... use this slug instead:
+deepseek/deepseek-v4-flash"` (the PAID slug), and the models list shows **no** DeepSeek `:free`
+variant at all. The user chose to keep a free primary rather than pay, so the default
+`OPENROUTER_DEFAULT_MODEL` is now **`minimax/minimax-m3:free`** — head-to-head the strongest
+free model still reliably available that honors the report contract (plain B1 language, no
+em-dashes, clean en/id long-form, `finish=stop` at ~500 words). Rejected free alternatives:
+`thinkingmachines/inkling:free` (403, agentic-harness only), `z-ai/glm-5.2:free` (persistent
+429), `google/gemma-4-31b-it:free` (flaky 429), `nvidia/nemotron-3-super-120b:free` (emits
+em-dashes). The app's request translation (`reasoning:{enabled:false}`) and streaming reader
+were verified correct against the live API on the paid deepseek slug and on minimax-m3.
+Everything else below stands; only the default slug changed. To run the paid DeepSeek model
+through OpenRouter, set `OPENROUTER_MODEL=deepseek/deepseek-v4-flash`.
 
 ## Problem
 

@@ -16912,16 +16912,35 @@ var _a3;
 _a3 = brand_privateBedrockClient;
 
 // src/server/prelude.ts
+var HEADLINE_HOLD_MAX_CHARS = 240;
 function createPreludeSplitter(headings) {
   let contentStarted = false;
   let preludeChars = 0;
   let held = "";
   let midLine = false;
+  let pendingHeadline = "";
+  let earlyHeadline = null;
   const startsHeading = (line) => headings.some((h) => line.startsWith(h));
   const headingPrefix = (partial) => headings.some((h) => h.startsWith(partial));
+  const isHeadlineLine = (line) => line.startsWith("# ");
+  const couldBeHeadline = (partial) => (partial === "#" || partial.startsWith("# ")) && partial.length <= HEADLINE_HOLD_MAX_CHARS;
   const thinking = (text) => {
     preludeChars += text.length;
     return { kind: "thinking", text };
+  };
+  const demote2 = (items) => {
+    if (pendingHeadline === "") return;
+    if (earlyHeadline === null) earlyHeadline = pendingHeadline.split("\n")[0];
+    items.push(thinking(pendingHeadline));
+    pendingHeadline = "";
+  };
+  const contentFrom = (text) => {
+    contentStarted = true;
+    const lead = pendingHeadline !== "" ? pendingHeadline : earlyHeadline !== null ? `${earlyHeadline}
+
+` : "";
+    pendingHeadline = "";
+    return { kind: "content", text: lead + text };
   };
   return {
     push(delta) {
@@ -16933,11 +16952,23 @@ function createPreludeSplitter(headings) {
       for (; ; ) {
         const nl = text.indexOf("\n");
         if (nl === -1) break;
-        if (!midLine && startsHeading(text.slice(0, nl))) {
-          contentStarted = true;
-          items.push({ kind: "content", text });
+        const line = text.slice(0, nl);
+        if (!midLine && startsHeading(line)) {
+          items.push(contentFrom(text));
           return items;
         }
+        if (!midLine && pendingHeadline !== "" && line.trim() === "") {
+          pendingHeadline += text.slice(0, nl + 1);
+          text = text.slice(nl + 1);
+          continue;
+        }
+        if (!midLine && isHeadlineLine(line)) {
+          demote2(items);
+          pendingHeadline = text.slice(0, nl + 1);
+          text = text.slice(nl + 1);
+          continue;
+        }
+        if (!midLine) demote2(items);
         items.push(thinking(text.slice(0, nl + 1)));
         midLine = false;
         text = text.slice(nl + 1);
@@ -16948,27 +16979,33 @@ function createPreludeSplitter(headings) {
         return items;
       }
       if (startsHeading(text)) {
-        contentStarted = true;
-        items.push({ kind: "content", text });
+        items.push(contentFrom(text));
         return items;
       }
-      if (headingPrefix(text)) {
+      if (headingPrefix(text) || couldBeHeadline(text)) {
         held = text;
         return items;
       }
+      demote2(items);
       midLine = true;
       items.push(thinking(text));
       return items;
     },
     flush() {
-      if (contentStarted || held === "") return [];
-      const text = held;
+      if (contentStarted) return [];
+      const items = [];
+      const tail = held;
       held = "";
-      if (startsHeading(text)) {
-        contentStarted = true;
-        return [{ kind: "content", text }];
+      if (tail !== "" && startsHeading(tail)) {
+        items.push(contentFrom(tail));
+        return items;
       }
-      return [thinking(text)];
+      if (pendingHeadline !== "") {
+        items.push(thinking(pendingHeadline));
+        pendingHeadline = "";
+      }
+      if (tail !== "") items.push(thinking(tail));
+      return items;
     },
     get contentStarted() {
       return contentStarted;
@@ -16982,6 +17019,8 @@ function createPreludeSplitter(headings) {
 // src/server/deepseek.ts
 var DEFAULT_MODEL = "deepseek-v4-flash";
 var DEFAULT_BASE_URL = "https://api.deepseek.com";
+var OPENROUTER_DEFAULT_MODEL = "minimax/minimax-m3:free";
+var OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
 var TEMPERATURE = 0.5;
 var TIMEOUT_MS = 6e5;
 var MAX_ATTEMPTS = 3;
@@ -17037,23 +17076,43 @@ var DeepSeekEmptyReportError = class extends DeepSeekError {
   }
 };
 function isConfigured() {
-  return typeof process.env.DEEPSEEK_API_KEY === "string" && process.env.DEEPSEEK_API_KEY !== "";
+  return resolveProviders().length > 0;
 }
-function readConfig() {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) {
-    throw new DeepSeekError(
-      "The report generator is not configured on this server: DEEPSEEK_API_KEY is unset. Geometry, section 1 and flat-profile reports work without it.",
-      {
-        publicMessage: "The report generator is not configured on this server. Your stack signature above is complete and was computed locally; only the interpreted sections need it."
-      }
-    );
+function envKey(name) {
+  const value = process.env[name];
+  return typeof value === "string" && value !== "" ? value : void 0;
+}
+function resolveProviders() {
+  const providers = [];
+  const openRouterKey = envKey("OPENROUTER_API_KEY");
+  if (openRouterKey) {
+    providers.push({
+      name: "openrouter",
+      kind: "openrouter",
+      apiKey: openRouterKey,
+      baseURL: process.env.OPENROUTER_BASE_URL || OPENROUTER_DEFAULT_BASE_URL,
+      model: process.env.OPENROUTER_MODEL || OPENROUTER_DEFAULT_MODEL
+    });
   }
-  return {
-    apiKey,
-    baseURL: process.env.DEEPSEEK_BASE_URL || DEFAULT_BASE_URL,
-    model: process.env.DEEPSEEK_MODEL || DEFAULT_MODEL
+  const deepSeekKey = envKey("DEEPSEEK_API_KEY");
+  if (deepSeekKey) {
+    providers.push({
+      name: "deepseek",
+      kind: "deepseek",
+      apiKey: deepSeekKey,
+      baseURL: process.env.DEEPSEEK_BASE_URL || DEFAULT_BASE_URL,
+      model: process.env.DEEPSEEK_MODEL || DEFAULT_MODEL
+    });
+  }
+  return providers;
+}
+function openRouterHeaders() {
+  const headers = {
+    "X-Title": process.env.OPENROUTER_APP_TITLE || "Mindstack"
   };
+  const referer = envKey("OPENROUTER_APP_URL");
+  if (referer) headers["HTTP-Referer"] = referer;
+  return headers;
 }
 function resolveReasoningEffort(raw2) {
   const value = (raw2 ?? "").trim();
@@ -17069,20 +17128,27 @@ function activeReasoningMode() {
 function buildChatRequest(input) {
   const effort = resolveReasoningEffort(input.reasoningEffort);
   const thinkingOn = effort !== DISABLE_REASONING && effort !== PROMPTED_REASONING;
-  return {
+  const common = {
     model: input.model,
     temperature: TEMPERATURE,
     stream: true,
     max_tokens: input.maxTokens ?? MAX_COMPLETION_TOKENS,
-    // The DeepSeek-documented on/off switch for hybrid reasoning.
-    thinking: { type: thinkingOn ? "enabled" : "disabled" },
-    // A cap is sent ONLY when thinking is on AND an explicit level was chosen; unbounded
-    // (null) sends no cap, so the model decides how much to think.
-    ...thinkingOn && effort !== null ? { reasoning_effort: effort } : {},
     messages: [
       { role: "system", content: input.system },
       { role: "user", content: input.user }
     ]
+  };
+  if (input.kind === "openrouter") {
+    const reasoning = !thinkingOn ? { enabled: false } : effort !== null ? { effort } : { enabled: true };
+    return { ...common, reasoning };
+  }
+  return {
+    ...common,
+    // The DeepSeek-documented on/off switch for hybrid reasoning.
+    thinking: { type: thinkingOn ? "enabled" : "disabled" },
+    // A cap is sent ONLY when thinking is on AND an explicit level was chosen; unbounded
+    // (null) sends no cap, so the model decides how much to think.
+    ...thinkingOn && effort !== null ? { reasoning_effort: effort } : {}
   };
 }
 function classifyStreamOutcome(outcome, options) {
@@ -17107,8 +17173,41 @@ function classifyStreamOutcome(outcome, options) {
   return null;
 }
 async function* streamReport(request) {
-  const config2 = readConfig();
-  const client = new OpenAI({ apiKey: config2.apiKey, baseURL: config2.baseURL, maxRetries: 0 });
+  const providers = resolveProviders();
+  if (providers.length === 0) {
+    throw new DeepSeekError(
+      "The report generator is not configured on this server: neither OPENROUTER_API_KEY nor DEEPSEEK_API_KEY is set. Geometry, section 1 and flat-profile reports work without it.",
+      {
+        publicMessage: "The report generator is not configured on this server. Your stack signature above is complete and was computed locally; only the interpreted sections need it."
+      }
+    );
+  }
+  for (let i = 0; i < providers.length; i += 1) {
+    const provider = providers[i];
+    const isLast = i === providers.length - 1;
+    let yielded = false;
+    try {
+      for await (const item of streamOneProvider(request, provider)) {
+        yielded = true;
+        yield item;
+      }
+      return;
+    } catch (error) {
+      if (yielded || isLast) throw error;
+      const next = providers[i + 1];
+      console.error(
+        `[failover] ${provider.name} failed before the first byte; trying ${next.name}: ` + (error instanceof Error ? error.message : String(error))
+      );
+    }
+  }
+}
+async function* streamOneProvider(request, provider) {
+  const client = new OpenAI({
+    apiKey: provider.apiKey,
+    baseURL: provider.baseURL,
+    maxRetries: 0,
+    ...provider.kind === "openrouter" ? { defaultHeaders: openRouterHeaders() } : {}
+  });
   const maxTokens = request.maxTokens ?? MAX_COMPLETION_TOKENS;
   const runawayChars = Math.max(0, maxTokens - REPORT_RESERVE_TOKENS) * THINKING_CHARS_PER_TOKEN;
   const prompted = activeReasoningMode() === PROMPTED_REASONING && (request.reportHeadings?.length ?? 0) > 0;
@@ -17127,7 +17226,8 @@ async function* streamReport(request) {
     try {
       const stream2 = await client.chat.completions.create(
         buildChatRequest({
-          model: config2.model,
+          model: provider.model,
+          kind: provider.kind,
           system: request.system,
           // The prompted fallback swaps the prompt (plan instructions stripped) instead
           // of the thinking switch, which is already off on that path.
@@ -17142,8 +17242,9 @@ async function* streamReport(request) {
         const choice = chunk.choices?.[0];
         if (!choice) continue;
         if (choice.finish_reason) finishReason = choice.finish_reason;
-        const reasoning = choice.delta?.reasoning_content;
-        if (typeof reasoning === "string" && reasoning.length > 0) {
+        const deltaObj = choice.delta;
+        const reasoning = typeof deltaObj?.reasoning_content === "string" && deltaObj.reasoning_content.length > 0 ? deltaObj.reasoning_content : typeof deltaObj?.reasoning === "string" && deltaObj.reasoning.length > 0 ? deltaObj.reasoning : "";
+        if (reasoning.length > 0) {
           reasoningChars += reasoning.length;
           yielded = true;
           yield { kind: "thinking", text: reasoning };
@@ -17247,6 +17348,10 @@ function describe2(error, timedOut) {
   if (typeof status === "number" && Number.isFinite(status) && status >= 500) {
     const message2 = "The report generator is having trouble upstream. Try again shortly.";
     return new DeepSeekError(message2, { status, retryable: true, publicMessage: message2 });
+  }
+  if (typeof status === "number" && Number.isFinite(status) && status >= 400 && status < 500) {
+    const message2 = "The report generator rejected the request. Please try again later.";
+    return new DeepSeekError(message2, { status, retryable: false, publicMessage: message2 });
   }
   if (error instanceof DeepSeekError) return error;
   const name = error instanceof Error ? error.name : "";
@@ -18673,7 +18778,7 @@ What follows governs how to turn one person's computed signature into their repo
 };
 
 // src/server/prompt/system-prompt.ts
-var SYSTEM_PROMPT = `You are the report generator for Mindstack. You receive a **computed stack signature** (eight Sakinorva cognitive-function scores turned into geometry: tiers, gaps, cliffs, indices, shapes, supply grades) plus the knowledge-base fragments this geometry triggered, and you write sections 2\u20137 of one person's report. Mindstack is not a typology and produces no type. The arithmetic is done and is not yours to redo. Interpret the geometry you are handed, using the theory you are handed, honestly about how little of it is validated.
+var SYSTEM_PROMPT = `You are the report generator for Mindstack. You receive a **computed stack signature** (eight Sakinorva cognitive-function scores turned into geometry: tiers, gaps, cliffs, indices, shapes, supply grades) plus the knowledge-base fragments this geometry triggered, and you write sections 2\u20136 of one person's report. Mindstack is not a typology and produces no type. The arithmetic is done and is not yours to redo. Interpret the geometry you are handed, using the theory you are handed, honestly about how little of it is validated.
 
 # Rule 0: GROUNDING (the supreme rule, above every gate below)
 
@@ -18689,7 +18794,7 @@ A claim with no named feature and no named mechanism is forbidden, however plaus
 
 You write for someone who has never studied psychology, does not think in numbers, and may be reading in their second language. Picture a curious, kind adult who reads the report's language at about IELTS band 5.0 (CEFR B1): they handle everyday language well, and they should understand every sentence on the first read, even reading in a hurry. If a bright child could not follow the idea after one patient telling, the sentence is not done. These bans work together with Rule 0.
 
-**(1) No numbers about the person. Ever.** The signature and the render plan are full of figures. Scores, gaps, points, strengths, grades, "how far above" one thing sits over another. They are PRIVATE EVIDENCE. Read them the way a doctor reads a blood test: you use every value to decide what to say, but you never read the patient their sodium level. You tell them what it means, in words they would use themselves. Never print, quote, round, rank, or hint at any figure. Not "thirteen points", not "a large gap", not "scores in the thirties", not "top of the list", not "above average". If a sentence seems to need a number, say the size in plain words instead. The ban also covers sneaky scoring words: never write *measured*, *scored*, *rated*, *ranked*, *underrated*, *overrated*, *ranks*, a "high reading" or "low reading", a "high group" or "low group", or that a habit "sits high" or "sits low", "sits at the top/bottom", is "placed too high/low", or that there is a "gap" between habits. In a falsifier (the "if you notice..." part), compare to what this reading expected. "Weaker than this reading suggests", "stronger than it looks". Never "than measured" or "than scored". (The only exception is section 6, and only for the method itself. A research date, the "16 of 40,320" fact, the name of a longer test. That section says nothing about this person.)
+**(1) No numbers about the person. Ever.** The signature and the render plan are full of figures. Scores, gaps, points, strengths, grades, "how far above" one thing sits over another. They are PRIVATE EVIDENCE. Read them the way a doctor reads a blood test: you use every value to decide what to say, but you never read the patient their sodium level. You tell them what it means, in words they would use themselves. Never print, quote, round, rank, or hint at any figure. Not "thirteen points", not "a large gap", not "scores in the thirties", not "top of the list", not "above average". If a sentence seems to need a number, say the size in plain words instead. The ban also covers sneaky scoring words: never write *measured*, *scored*, *rated*, *ranked*, *underrated*, *overrated*, *ranks*, a "high reading" or "low reading", a "high group" or "low group", or that a habit "sits high" or "sits low", "sits at the top/bottom", is "placed too high/low", or that there is a "gap" between habits. In a falsifier (the "if you notice..." part), compare to what this reading expected. "Weaker than this reading suggests", "stronger than it looks". Never "than measured" or "than scored". (The only exception is the short "where this came from" note that closes section 6, and only for the method itself. A research date, the "16 of 40,320" fact, the name of a longer test. That note says nothing about this person.)
 
 **(1a) Say size with a steady set of words, anchored to a real moment.** Vague size-words drift, so keep them consistent and tie each to something the reader would actually notice. Ladders, strongest to weakest:
 - how often: almost always, usually, often, sometimes, now and then, rarely, almost never
@@ -18803,18 +18908,17 @@ Never over-explain. Trust the reader to connect obvious ideas. If a smart reader
 
 # Report language
 
-The render instruction in each request names the report language. Write every reader-facing sentence in that language: the six headings (copied exactly as the render instruction lists them), all body text, every fork and falsifier, and the closing disclaimer block. The render instruction supplies the disclaimer in the right language; reproduce it verbatim and never translate it yourself. Any language-specific writing rules also arrive in the render instruction; they carry the same force as the rules here.
+The render instruction in each request names the report language. Write every reader-facing sentence in that language: the five headings (copied exactly as the render instruction lists them), all body text, every fork and falsifier, and the closing disclaimer block. The render instruction supplies the disclaimer in the right language; reproduce it verbatim and never translate it yourself. Any language-specific writing rules also arrive in the render instruction; they carry the same force as the rules here.
 
 # Structure and budget (05 \xA75.1)
 
-Seven sections, ordered most- to least-certain so confidence visibly decays. Section 1 (**Your stack signature**, arithmetic only) is rendered by code. **You do not write it**. You write:
+Six sections, ordered most- to least-certain so confidence visibly decays. Section 1 (**Your stack signature**, arithmetic only) is rendered by code. **You do not write it**. You write:
 
 2. **How your mind tends to work.** Tier structure interpreted: lead-cluster character, closed circuits and counterweights, pluralistic or monolithic judging, polarization. This section carries the most community ideas and guesses, and the highest constraint load.
 3. **How you handle different situations.** The report's own hypothetical scenarios, not the reader's. The render plan supplies three or four situations, each with a supply grade computed from this profile. Set the scene so the reader can picture who is there, what needs doing, when and where it happens, why it matters, and how the person has to handle it. Weave these details into the opening naturally. Then give three or four if-then signatures and one trade-off line. You may add concrete everyday texture to a scenario. That texture is invented, so phrase it as a guess. The reader described no situation: never imply otherwise, and say once, plainly, that these situations are hypothetical, built from the profile, and offered to be tested against real life.
 4. **When things get stressful.** Eruption candidates from the shadow floor, each with its crude expression and an early-warning line. The first symptom of an eruption state is *loss of healthy lead-function quality*, before any shadow behavior appears (community idea from Quenk's grip, via mbti-notes). Teach the reader to watch for the loss, not the eruption.
 5. **Things you can try.** Counterweights and bridges with activation conditions, plus experiments. Each experiment tests a *named* hypothesis from sections 2-4 and is low-stakes. Safe to run even if the hypothesis is false.
-6. **Where this report comes from.** Where the framework comes from and what was done to it. The provenance block below, written out for the reader in plain language. No claims about this person at all: this section explains the method, not the profile.
-7. **What this report can't tell you.** Retest fragility of every marginal feature. All three live hypotheses for any cliff (suppression, avoidance, simple non-development. Never pick one). That the report knows nothing about ability, mental health or worth. Then the disclaimer, verbatim.
+6. **What this report can't tell you.** Retest fragility of every marginal feature. All three live hypotheses for any cliff (suppression, avoidance, simple non-development. Never pick one). That the report knows nothing about ability, mental health or worth. Then, in one short plain-language paragraph, where this came from: the ideas mostly come from untested personality-community writing (the mbti-notes guides and Quenk's "grip"); reading them from this person's scores rather than a fixed type is our own untested guess; only the if-then situational shape rests on real science (Mischel and Shoda 1995, Fleeson 2001); and the eight scores come from an unvalidated hobby quiz. Keep it to a few sentences, make no claim about the person, then the disclaimer, verbatim.
 
 In every section above, the tier names, circuits, cliffs, axes and supply grades are patterns you INTERPRET, never words you PRINT. Describe each in plain speech, name every habit in everyday words (Rule 0.5), and attach no number.
 
@@ -18824,10 +18928,10 @@ In every section above, the tier names, circuits, cliffs, axes and supply grades
 
 The render plan prints a total word budget and, for a profile with resolved structure, a hard minimum. Meet it. Two rules bound how:
 
-- **Every paragraph anchors** to a named feature of this signature plus a named mechanism (Rule 0), or to framework provenance (section 6). A paragraph that anchors to neither is filler: delete it.
+- **Every paragraph anchors** to a named feature of this signature plus a named mechanism (Rule 0), or to framework provenance (the short note that closes section 6). A paragraph that anchors to neither is filler: delete it.
 - **Never manufacture length** by adding a feature the plan omits, by restating a feature in new words, or by generic personality prose that would fit any profile. Where the plan's total is small the geometry resolved little, and a short report is the honest output. Extra length is bought with grounded composition, not with padding.
 
-# Framework provenance (context for every section, written out in full in section 6)
+# Framework provenance (context for every section; named briefly in section 6's closing note)
 
 The Mindstack knowledge base generalizes ideas from four mbti-notes.tumblr.com guides (Type Fundamentals, Function Theory, Type Development, Type Spotting) and from Naomi Quenk's "grip" concept: typology-community writing, attributed and unvalidated. Those sources describe "loops" and "grips" as engagement states inside 16 fixed function stacks. Mindstack's own move is to re-key those mechanics onto the person's measured score geometry. Tiers derived from gaps, not from fixed stack positions. Real measured profiles almost never match one of the 16 canonical stacks (only 16 of 40,320 orderings are canonical). No type label is given: continuous scores carry more information than 16 boxes, and peer-reviewed work rejected fixed stack order (Reynierse 2009). The situational layer is the best-grounded part: if-then situation-behavior signatures (Mischel & Shoda 1995) and the finding that people occupy distributions of states rather than fixed essences (Fleeson 2001). The input is an unvalidated hobbyist questionnaire.
 
@@ -18892,12 +18996,12 @@ Generator rules:
 10. "Switch" as a mechanic, or loop/grip presented as validated mechanisms rather than community folklore.
 11. High-stakes advice contingent on the report being true (e.g., "avoid roles demanding Fe"). Levers must be reversible experiments.
 12. A report without the required disclaimer block, verbatim, at the end.
-13. Any number, score, point-count, percentage, rank, or measurement word describing the person. Sections 2-5 and 7 print no figures at all. Section 6 may state only method facts (research dates, the 16-of-40,320 fact, a longer test's name), never anything about this person.
+13. Any number, score, point-count, percentage, rank, or measurement word describing the person. Sections 2-6 print no figures about the person. The sole exception is section 6's short "where this came from" note, which may state method facts (research dates, the 16-of-40,320 fact, a longer test's name), never anything about this person.
 14. ANY two-letter habit code (Ni, Ne, Si, Se, Ti, Te, Fi, Fe) anywhere in the report, or any textbook term for a habit ("introverted intuition", "cognitive function", "sensing type"). Every habit is named in plain everyday words only. The codes stay in section 1.
 
 # Output format
 
-Markdown, exactly the six headings the user message specifies, in its report language and order. Nothing before the first heading \u2014 except the single \`# \` headline line when the user message asks for one, and except the planning pass when, and only when, the user message explicitly asks for one \u2014 and nothing after the disclaimer: no preamble, no meta-commentary, no section 1, no closing pleasantry.`;
+Markdown, exactly the five headings the user message specifies, in its report language and order. Nothing before the first heading \u2014 except the single \`# \` headline line when the user message asks for one, and except the planning pass when, and only when, the user message explicitly asks for one \u2014 and nothing after the disclaimer: no preamble, no meta-commentary, no section 1, no closing pleasantry.`;
 var SYSTEM_PROMPT_WORDS = SYSTEM_PROMPT.trim().split(/\s+/).length;
 
 // src/server/prompt/foundations.ts
@@ -18920,7 +19024,6 @@ var REPORT_HEADINGS_EN = [
   "## How you handle different situations",
   "## When things get stressful",
   "## Things you can try",
-  "## Where this report comes from",
   "## What this report can't tell you"
 ];
 var REPORT_HEADINGS_ID = [
@@ -18928,7 +19031,6 @@ var REPORT_HEADINGS_ID = [
   "## Cara kamu menghadapi berbagai situasi",
   "## Saat keadaan penuh tekanan",
   "## Hal yang bisa kamu coba",
-  "## Dari mana laporan ini berasal",
   "## Apa yang tidak bisa dikatakan laporan ini"
 ];
 function headingsFor(language) {
@@ -18953,9 +19055,9 @@ function languageDirective(language) {
     return ["Report language: ENGLISH. Every reader-facing sentence is written in English."];
   }
   return [
-    'Report language: INDONESIAN (Bahasa Indonesia). Every reader-facing sentence is written in Indonesian: the six headings (exactly as listed below), all body text, every fork and falsifier, and the closing disclaimer block. Address the reader as "kamu", warm and plain, the way a kind friend talks.',
+    'Report language: INDONESIAN (Bahasa Indonesia). Every reader-facing sentence is written in Indonesian: the five headings (exactly as listed below), all body text, every fork and falsifier, and the closing disclaimer block. Address the reader as "kamu", warm and plain, the way a kind friend talks.',
     'The signature, the render plan and the fragments above are English source material, not wording. Every quoted English phrasing in them ("too close to tell apart", "worth checking") names a meaning to express in natural everyday Indonesian, never words to copy or leave in English.',
-    'The plain language standard applies with the same force in Indonesian: at most 15 words per sentence, one idea per sentence, everyday words a junior-high reader understands on the first read. No English loanword where a plain Indonesian word exists. No academic Indonesian, no psychology terms, no em-dashes, no "bukan X, melainkan Y" frames, and never a number, grade, or two-letter code about the person. The one place numbers are allowed (section 6, method facts only) uses Indonesian number formatting: a period for thousands, as in "hanya 16 dari 40.320 urutan yang mungkin".',
+    'The plain language standard applies with the same force in Indonesian: at most 15 words per sentence, one idea per sentence, everyday words a junior-high reader understands on the first read. No English loanword where a plain Indonesian word exists. No academic Indonesian, no psychology terms, no em-dashes, no "bukan X, melainkan Y" frames, and never a number, grade, or two-letter code about the person. The one place numbers are allowed (the short "where this came from" method note inside section 6, method facts only) uses Indonesian number formatting: a period for thousands, as in "hanya 16 dari 40.320 urutan yang mungkin".',
     'The confidence-audibility bans carry over: a community idea or guess never contains "penelitian", "sains", "bukti", "terbukti", or "tervalidasi" in the affirmative (negations like "belum pernah diuji oleh sains" are required, not banned). Never write "jelas", "tidak diragukan", or "ini berarti" about the person.',
     "Plain everyday Indonesian words for the eight habits (adapt to the sentence, never as a fixed label): " + Object.keys(PLAIN_HABITS_ID).map((fn) => `${fn} = ${PLAIN_HABITS_ID[fn]}`).join(" \xB7 ") + ". The two-letter codes themselves never appear in the report.",
     'Confidence stems in Indonesian, one per level: established science = "Penelitian menemukan bahwa..."; community idea = "Beberapa penulis kepribadian mengatakan ini. Ini belum pernah diuji oleh sains."; stretched community idea = "Penulis kepribadian membicarakan hal ini di latar yang berbeda. Kami menebak ini mungkin cocok juga untukmu. Coba dan lihat sendiri."; our guess = "Ini sesuatu yang kami duga mungkin benar untukmu. Lihat apakah cocok dengan hidupmu." The first use of a community idea includes "belum teruji" or "belum pernah dibuktikan".',
@@ -18963,21 +19065,6 @@ function languageDirective(language) {
     `Gate C1's fixed falsifier format in Indonesian, labels included: "Prediksi: ... Pengamatan tandingan: kalau kamu melihat bahwa ..., tebakan ini salah. Buang saja." Never leave the labels in English.`
   ];
 }
-var FRAMEWORK_PROVENANCE_TEXT_ID = [
-  "Kami membangun laporan ini dari sekumpulan kecil sumber. Sebagian kuat. Sebagian tidak. Ini asal-usulnya.",
-  "",
-  'Sebagian besar idenya berasal dari tulisan komunitas kepribadian. Empat panduan di mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, Type Spotting) dan ide "grip" dari Naomi Quenk. Para penulis ini layak dihargai. Tapi tidak satu pun dari ini pernah diuji oleh sains.',
-  "",
-  'Sumber-sumber itu menggambarkan pola yang mereka sebut "loop" dan "grip". Pola ini tentang kebiasaan mental mana yang kamu pakai bersamaan, mana yang kamu hindari, dan mana yang muncul saat kamu lelah. Sumber aslinya mengikat pola-pola ini pada 16 tipe yang baku.',
-  "",
-  'Kami melakukan hal yang berbeda. Kami tetap memakai polanya tapi berhenti mengikatnya pada tipe baku. Sebagai gantinya, kami membacanya dari skor kuismu. Kami melihat jarak antar angkamu. Kami melakukan ini karena skor sungguhan hampir tidak pernah cocok dengan salah satu dari 16 urutan baku. Ada 40.320 urutan yang mungkin, dan hanya 16 yang "klasik". Perubahan ini adalah tebakan kami sendiri. Ini belum pernah diuji.',
-  "",
-  "Itu juga alasan kami tidak memberimu label tipe empat huruf. Delapan skor terpisah memberi tahu kami lebih banyak daripada satu kotak dari 16. Penelitian yang diterbitkan juga menolak gagasan urutan yang baku (Reynierse, 2009). Label tipe akan menjadi klaim yang tidak bisa kami buktikan.",
-  "",
-  'Satu bagian dari laporan ini memang bersandar pada sains sungguhan. Gagasan bahwa orang bertindak dalam pola "kalau situasi ini, maka respons ini" berasal dari Mischel dan Shoda (1995). Temuan bahwa orang bergerak melewati banyak keadaan, bukan satu kepribadian yang tetap, berasal dari Fleeson (2001). Karena itu laporan ini tidak menggambarkanmu secara umum. Laporan ini membangun situasi tertentu dan menebak bagaimana kamu akan bertindak di masing-masingnya. Bentuk "kalau-maka" adalah sains sungguhan. Setiap tebakan tentang kebiasaan mana yang cocok dengan situasi mana tetaplah tebakan kami.',
-  "",
-  "Terakhir: delapan skormu berasal dari kuis hobi tanpa bukti yang diterbitkan bahwa kuis itu bekerja. Orang sering mendapat hasil yang berbeda saat mengulangnya."
-].join("\n");
 var PLAIN_FLAT_ID = {
   Ni: "firasatmu tentang ke mana segala sesuatu mengarah",
   Ne: 'kegemaranmu pada ide baru dan kemungkinan "bagaimana kalau"',
@@ -18992,10 +19079,6 @@ function buildHonestNullReportId(signature) {
   const watch = signature.watchItem;
   const lines = [
     REPORT_HEADINGS_ID[4],
-    "",
-    FRAMEWORK_PROVENANCE_TEXT_ID,
-    "",
-    REPORT_HEADINGS_ID[5],
     "",
     "Kedelapan jawabanmu keluar sangat berdekatan. Perbedaan di antaranya terlalu kecil untuk bisa dibaca dengan jelas oleh kuis ini. Kami tidak bisa menulis laporan yang berguna dari hasil ini. Apa pun yang kami katakan akan berlaku untuk hampir semua orang.",
     "",
@@ -19369,7 +19452,7 @@ function assemblePrompt(signature, _context, language = DEFAULT_REPORT_LANGUAGE)
   const features = [];
   const push = (feature, budgetOverride) => {
     const built = { ...feature, budgetWords: budgetOverride ?? BUDGET[feature.mode] };
-    if ((built.mode === "full" || built.mode === "fork") && built.kind !== "provenance" && built.kind !== "weak-signal" && built.kind !== "scenarios") {
+    if ((built.mode === "full" || built.mode === "fork") && built.kind !== "weak-signal" && built.kind !== "scenarios") {
       built.instructions = [...built.instructions, DEPTH_CONTRACT];
     }
     features.push(built);
@@ -19391,7 +19474,7 @@ function assemblePrompt(signature, _context, language = DEFAULT_REPORT_LANGUAGE)
       functions: [...upper, ...lower],
       mergedFrom: [],
       instructions: [
-        "This profile resolves little, so the honest output is SHORT. Do not stretch it: the length rules for a resolved profile do not apply, and section 6 (provenance) is the only part that runs at full length here.",
+        "This profile resolves little, so the honest output is SHORT. Do not stretch it: the length rules for a resolved profile do not apply, and every section stays brief.",
         "No adjacent rank in this profile is real: no tier boundary exists, so no tiers, no circuit, no shapes, no eruption candidates may be named.",
         `The ONLY licensed content is the contrast between the habits you use most (${fnList(upper)}) and the ones you use least (${fnList(lower)}). Everything between them stays silent. Name them in plain words; never call them "top/bottom", "high/low", or "edges".`,
         "Section 3 must say plainly that behaviour-in-situation predictions need bands this profile does not resolve, so no scenarios are offered, and point to the 256-item Sakinorva Domains Test as a richer input; sections 4 and 5 stay short and name no eruption candidate."
@@ -19426,18 +19509,6 @@ function assemblePrompt(signature, _context, language = DEFAULT_REPORT_LANGUAGE)
       Math.max(380, scenarios.length * 190)
     );
   }
-  push({
-    id: "provenance",
-    kind: "provenance",
-    title: "Where this report comes from (framework provenance)",
-    section: 6,
-    salience: 90,
-    mode: "full",
-    forkRequired: false,
-    functions: [],
-    mergedFrom: [],
-    instructions: provenanceInstructions()
-  }, 400);
   const renderPlan = orderPlan(features);
   const fragmentKeys = selection.keys();
   const fragments = resolve(fragmentKeys);
@@ -19467,10 +19538,10 @@ function assemblePrompt(signature, _context, language = DEFAULT_REPORT_LANGUAGE)
     systemPrompt: fullSystemPrompt(),
     userPrompt: buildUserPrompt({ ...promptInput, plan: prompted }),
     userPromptNoPlan: prompted ? buildUserPrompt({ ...promptInput, plan: false }) : null,
-    // '# ' first: the headline line opens the report, so the prelude splitter treats it
-    // as the plan/report boundary. Safe as a bare prefix because plan lines are forbidden
-    // from starting with '#' (PLANNING_PASS_INSTRUCTIONS).
-    reportHeadings: ["# ", ...headingsFor(language)],
+    // Canonical headings only. The headline line (`# `) is NOT listed here: it is a
+    // conditional boundary the splitter handles internally (prelude.ts) — a bare `# `
+    // prefix in this list once reclassified a whole misplaced plan as report content.
+    reportHeadings: [...headingsFor(language)],
     // Output budget (~2.2 tokens/word + slack) PLUS a reasoning allowance sized to the
     // active mode (reasoning bills against the same max_tokens as the report): a wide one
     // for native thinking, a small one for the capped prompted plan, none for `none`.
@@ -19859,17 +19930,6 @@ function orderPlan(features) {
     (a, b) => a.feature.salience === b.feature.salience ? a.index - b.index : a.feature.salience - b.feature.salience
   ).map((entry) => entry.feature);
 }
-function provenanceInstructions() {
-  return [
-    "300-500 words. This section says nothing about the person. It explains where the method comes from and what we did with it. No numbers, no predictions.",
-    `Sources (community ideas): we took ideas from four guides on mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, Type Spotting) and from Naomi Quenk's "grip" idea. These are personality-community writing. They have never been tested by science. Say that plainly.`,
-    `What we changed (our guess): those sources tie their patterns to 16 fixed types. We kept the patterns but read them from the person's quiz scores instead. We look at the gaps between scores, and we ignore the fixed type order. Real quiz results almost never match one of the 16 classic orders (only 16 out of 40,320 possible orders are "classic"). This change is our own guess. It has never been tested.`,
-    "Why we give no type label: eight separate scores tell more than 16 boxes. Published research rejected fixed function order (Reynierse 2009). A type label would be a claim we cannot back up.",
-    'What rests on real science: the "if this situation, then this response" idea comes from Mischel and Shoda (1995). The finding that people move through many states comes from Fleeson (2001). The if-then shape is real science. Every guess about which habit fits which situation is still ours.',
-    "Be honest about the input: the eight scores come from a hobby quiz that has never been tested for accuracy. People often get different results on retake.",
-    'Use the simplest words possible. Keep sentences under 15 words. Say "this tool" or "this method" or "the quiz," never "pipeline" or "framework" or "instrument" or "validity evidence." Say "your answers" or "your results," never "your scores" or "ranked." The disclaimer block at the end is fixed. Copy it exactly as given. Keep confidence levels clear here too. This section is where the reader learns which parts are science and which are our guesses.'
-  ];
-}
 function scenarioInstructions(scenarios) {
   const instructions = [
     `Render ALL ${scenarios.length} scenarios below, each as its own vignette, in this order. Add no scenario and drop none.`,
@@ -19900,21 +19960,6 @@ function scenarioInstructions(scenarios) {
   }
   return instructions;
 }
-var FRAMEWORK_PROVENANCE_TEXT = [
-  "We built this report from a small set of sources. Some are strong. Some are not. Here is what comes from where.",
-  "",
-  `Most of the ideas come from personality-community writing. Four guides on mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, Type Spotting) and Naomi Quenk's idea of the "grip." These writers deserve credit. But none of this has been tested by science.`,
-  "",
-  'Those sources describe patterns they call "loops" and "grips." These are about which mental habits you use together, which you avoid, and which come out when you are tired. The original sources tie these patterns to 16 fixed types.',
-  "",
-  'We did something different. We kept the patterns but stopped tying them to fixed types. Instead, we read them from your quiz scores. We look at the gaps between your numbers. We do this because real scores almost never match one of the 16 fixed orders. There are 40,320 possible orders, and only 16 are the "classic" ones. This change is our own guess. It has never been tested.',
-  "",
-  "That is also why we give you no four-letter type label. Eight separate scores tell us more than one box out of 16. Published research also rejected the idea of a fixed order (Reynierse, 2009). A type label would be a claim we cannot back up.",
-  "",
-  'One part of this report does rest on real science. The idea that people act in "if this situation, then this response" patterns comes from Mischel and Shoda (1995). The finding that people move through many states, not just one fixed personality, comes from Fleeson (2001). That is why this report does not describe you in general. It builds specific situations and guesses how you would act in each one. The "if-then" shape is real science. Every guess about which habit fits which situation is still ours.',
-  "",
-  "Last: your eight scores come from a hobby quiz with no published proof that it works. People often get different results when they take it again."
-].join("\n");
 function buildHonestNullReport(signature) {
   const watch = signature.watchItem;
   const PLAIN = {
@@ -19929,10 +19974,6 @@ function buildHonestNullReport(signature) {
   };
   const lines = [
     REPORT_HEADINGS[4],
-    "",
-    FRAMEWORK_PROVENANCE_TEXT,
-    "",
-    REPORT_HEADINGS[5],
     "",
     "Your eight answers came out very close together. The differences between them are too small for this quiz to read clearly. We cannot write a useful report from these results. Anything we said would be true of almost anyone.",
     "",
@@ -19960,7 +20001,7 @@ var PLANNING_PASS_INSTRUCTIONS = [
   "3. COMPOSITION HUNT. This is the core of the plan. Generate four to six candidate combinations of the fired features (pairs and triples). For each candidate, ask: what does this combination predict that no single feature predicts alone \u2014 about how this person argues, decides, procrastinates, burns out, recovers, repairs a mistake? Write the candidate down even if you then reject it. Keep the two or three whose predictions are most specific and most surprising while still running through named mechanisms; explicitly discard the generic ones and say why. No fragment states these interactions; deriving them is the report's most valuable content. When the render plan lists fewer than three features, skip the hunt: note what the sparse geometry licenses and move on \u2014 the instructions in the plan outrank this stage.",
   "4. SCENARIO SKETCHES (skip this stage entirely when no scenarios are listed). One line each: the demanded habit and how its supply grade will FEEL in the scene; the sharpest if-then signature you can draft for it; the workaround this profile would reach for instead (substituting a stronger habit); and what that workaround costs or bills later.",
   "5. ADVERSARIAL PASS. Attack your own plan the way the audit will. For each planned claim: would the OPPOSITE profile (lead and floor swapped) accept it as accurate? Then it says nothing \u2014 sharpen it until it discriminates, or drop it. Which credited strength still lacks a cost tied to the SAME feature? Which section still lacks its falsifiable prediction with a counter-observation? Is any tie about to be ranked, any marginal feature about to be stated one-sidedly, any grade word, number, or two-letter code about to leak into report prose? Fix each problem here, in the plan, where it is one line \u2014 not in the report, where it is a rewrite.",
-  "6. ARC AND CLOSE. State the through-line in one sentence: the one thing this signature is about, which every section should serve. Then: which composition anchors section 2; which experiment in section 5 tests which named hypothesis from sections 2-4 (every lever must trace back to one); and how section 7 names the limits without taking back what the report actually said.",
+  "6. ARC AND CLOSE. State the through-line in one sentence: the one thing this signature is about, which every section should serve. Then: which composition anchors section 2; which experiment in section 5 tests which named hypothesis from sections 2-4 (every lever must trace back to one); and how section 6 names the limits without taking back what the report actually said.",
   'Plan budget: 500-900 words, never more than 1200. Spend the depth on stages 3 and 5. Plain prose lines and list numbers only: no markdown headings, no line starting with "#". Codes, grades, internal terms and figures ARE allowed in the plan (it is private and is not the report). Write the plan in English whatever language the report is written in.',
   'Then write the report, starting directly at the headline line (`# `), followed by the first canonical heading. The report must stand alone: never refer to the plan, never write "as planned" or "as noted above".'
 ];
@@ -20078,11 +20119,11 @@ function buildUserPrompt(input) {
     out.push("");
   }
   out.push(
-    "HEADLINE. The report's very first line is exactly one line of the form `# <headline>` (one `#`, one space), followed by a blank line, then the first canonical heading. Write it the way a front-page newspaper headline is written: one short declarative sentence that captures the whole report's central finding about this person, so specific that a different profile would need a different headline. Plain everyday words, at most twelve words, written in the report's language. Never a number, a score, a grade word, a two-letter habit code, or a type label; no colon, no em-dash, no quotation marks; never a restatement of a section heading; the client renders it as the report's title."
+    "HEADLINE. Immediately before the first canonical heading" + (plan ? " \u2014 that is, after the planning pass ends; the headline is the report's first line, NEVER your output's first line and never inside the plan" : "") + ", write exactly one line of the form `# <headline>` (one `#`, one space), followed by a blank line, then the first canonical heading. Write it the way a front-page newspaper headline is written: one short declarative sentence that captures the whole report's central finding about this person, so specific that a different profile would need a different headline. Plain everyday words, at most twelve words, written in the report's language. Never a number, a score, a grade word, a two-letter habit code, or a type label; no colon, no em-dash, no quotation marks; never a restatement of a section heading; the client renders it as the report's title."
   );
   out.push("");
   out.push(
-    "Write Sections 2\u20137 ONLY. Section 1 is rendered client-side from the Signature above; do not restate it. Use EXACTLY these markdown headings, in this order, with nothing before the first one except " + (plan ? "the planning pass described above and " : "") + "the single headline line (the client matches these strings to render its cards):"
+    "Write Sections 2\u20136 ONLY. Section 1 is rendered client-side from the Signature above; do not restate it. Use EXACTLY these markdown headings, in this order, with nothing before the first one except " + (plan ? "the planning pass described above and " : "") + "the single headline line (the client matches these strings to render its cards):"
   );
   out.push("");
   for (const heading of headingsFor(language)) out.push(`- \`${heading}\``);

@@ -134,7 +134,7 @@ async function run(scores: Scores, language: ReportLanguage): Promise<void> {
     return;
   }
 
-  /* 2. Sections 2-7, streamed. This is what the reader came for, so it sits at
+  /* 2. Sections 2-6, streamed. This is what the reader came for, so it sits at
    * the top of the output with nothing above it to scroll past. */
   const report = createReportView();
   if (tierStrip) {

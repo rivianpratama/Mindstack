@@ -2,7 +2,7 @@
  * Everything that switches with the report language (05 §5.1 headings, the
  * §5.6 disclaimer, the honest-null FLAT report, and the per-request render
  * directive). One place, so English and Indonesian cannot drift apart
- * structurally: same six headings, same disclaimer content, same FLAT facts.
+ * structurally: same five headings, same disclaimer content, same FLAT facts.
  *
  * Only the READER-FACING text switches. The system prompt, the signature, the
  * render plan and the knowledge-base fragments stay English on every path -
@@ -17,9 +17,9 @@
  * lives in this module and reaches a prompt only when the request says 'id'.
  *
  * The Indonesian strings below are verbatim-contract translations of their
- * English counterparts (kb `rules.disclaimer`, assemble's REPORT_HEADINGS and
- * FRAMEWORK_PROVENANCE_TEXT). Editing an English original means re-translating
- * its pair here; test/language.test.ts pins the structural equivalences.
+ * English counterparts (kb `rules.disclaimer`, assemble's REPORT_HEADINGS).
+ * Editing an English original means re-translating its pair here;
+ * test/language.test.ts pins the structural equivalences.
  */
 
 import type { FunctionKey, Signature } from '../../shared/geometry';
@@ -29,11 +29,11 @@ import { getDisclaimer } from '../kb/loader';
 export { DEFAULT_REPORT_LANGUAGE, type ReportLanguage };
 
 /* ------------------------------------------------------------------ *
- * Headings (05 §5.1, sections 2-7; section 1 is code-rendered)
+ * Headings (05 §5.1, sections 2-6; section 1 is code-rendered)
  * ------------------------------------------------------------------ */
 
 /**
- * The six headings the client's cards are keyed to, in order. Exact strings:
+ * The five headings the client's cards are keyed to, in order. Exact strings:
  * the client matches on them (ReportView SECTION_TITLES / SECTION_TITLES_ID).
  */
 export const REPORT_HEADINGS_EN = [
@@ -41,7 +41,6 @@ export const REPORT_HEADINGS_EN = [
   '## How you handle different situations',
   '## When things get stressful',
   '## Things you can try',
-  '## Where this report comes from',
   "## What this report can't tell you",
 ] as const;
 
@@ -50,7 +49,6 @@ export const REPORT_HEADINGS_ID = [
   '## Cara kamu menghadapi berbagai situasi',
   '## Saat keadaan penuh tekanan',
   '## Hal yang bisa kamu coba',
-  '## Dari mana laporan ini berasal',
   '## Apa yang tidak bisa dikatakan laporan ini',
 ] as const;
 
@@ -113,7 +111,7 @@ export function languageDirective(language: ReportLanguage): string[] {
   }
   return [
     'Report language: INDONESIAN (Bahasa Indonesia). Every reader-facing sentence is written ' +
-      'in Indonesian: the six headings (exactly as listed below), all body text, every fork ' +
+      'in Indonesian: the five headings (exactly as listed below), all body text, every fork ' +
       'and falsifier, and the closing disclaimer block. Address the reader as "kamu", warm ' +
       'and plain, the way a kind friend talks.',
     'The signature, the render plan and the fragments above are English source material, not ' +
@@ -125,8 +123,9 @@ export function languageDirective(language: ReportLanguage): string[] {
       'on the first read. No English loanword where a plain Indonesian word exists. No ' +
       'academic Indonesian, no psychology terms, no em-dashes, no "bukan X, melainkan Y" ' +
       'frames, and never a number, grade, or two-letter code about the person. The one place ' +
-      'numbers are allowed (section 6, method facts only) uses Indonesian number formatting: ' +
-      'a period for thousands, as in "hanya 16 dari 40.320 urutan yang mungkin".',
+      'numbers are allowed (the short "where this came from" method note inside section 6, ' +
+      'method facts only) uses Indonesian number formatting: a period for thousands, as in ' +
+      '"hanya 16 dari 40.320 urutan yang mungkin".',
     'The confidence-audibility bans carry over: a community idea or guess never contains ' +
       '"penelitian", "sains", "bukti", "terbukti", or "tervalidasi" in the affirmative ' +
       '(negations like "belum pernah diuji oleh sains" are required, not banned). Never ' +
@@ -157,44 +156,6 @@ export function languageDirective(language: ReportLanguage): string[] {
  * FLAT honest-null report, Indonesian (mirrors assemble.ts's English one)
  * ------------------------------------------------------------------ */
 
-/** Verbatim-contract translation of assemble's FRAMEWORK_PROVENANCE_TEXT. */
-export const FRAMEWORK_PROVENANCE_TEXT_ID = [
-  'Kami membangun laporan ini dari sekumpulan kecil sumber. Sebagian kuat. Sebagian tidak. Ini asal-usulnya.',
-  '',
-  'Sebagian besar idenya berasal dari tulisan komunitas kepribadian. Empat panduan di ' +
-    'mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, ' +
-    'Type Spotting) dan ide "grip" dari Naomi Quenk. Para penulis ini layak dihargai. ' +
-    'Tapi tidak satu pun dari ini pernah diuji oleh sains.',
-  '',
-  'Sumber-sumber itu menggambarkan pola yang mereka sebut "loop" dan "grip". Pola ini ' +
-    'tentang kebiasaan mental mana yang kamu pakai bersamaan, mana yang kamu hindari, dan ' +
-    'mana yang muncul saat kamu lelah. Sumber aslinya mengikat pola-pola ini pada 16 tipe ' +
-    'yang baku.',
-  '',
-  'Kami melakukan hal yang berbeda. Kami tetap memakai polanya tapi berhenti mengikatnya pada ' +
-    'tipe baku. Sebagai gantinya, kami membacanya dari skor kuismu. Kami melihat jarak antar ' +
-    'angkamu. Kami melakukan ini karena skor sungguhan hampir tidak pernah cocok dengan ' +
-    'salah satu dari 16 urutan baku. Ada 40.320 urutan yang mungkin, dan hanya 16 yang ' +
-    '"klasik". Perubahan ini adalah tebakan kami sendiri. Ini belum pernah diuji.',
-  '',
-  'Itu juga alasan kami tidak memberimu label tipe empat huruf. Delapan skor terpisah ' +
-    'memberi tahu kami lebih banyak daripada satu kotak dari 16. Penelitian yang diterbitkan juga ' +
-    'menolak gagasan urutan yang baku (Reynierse, 2009). Label tipe akan menjadi klaim yang ' +
-    'tidak bisa kami buktikan.',
-  '',
-  'Satu bagian dari laporan ini memang bersandar pada sains sungguhan. Gagasan bahwa orang ' +
-    'bertindak dalam pola "kalau situasi ini, maka respons ini" berasal dari Mischel dan ' +
-    'Shoda (1995). Temuan bahwa orang bergerak melewati banyak keadaan, bukan satu ' +
-    'kepribadian yang tetap, berasal dari Fleeson (2001). Karena itu laporan ini tidak ' +
-    'menggambarkanmu secara umum. Laporan ini membangun situasi tertentu dan menebak ' +
-    'bagaimana kamu akan bertindak di masing-masingnya. Bentuk "kalau-maka" adalah sains ' +
-    'sungguhan. Setiap tebakan tentang kebiasaan mana yang cocok dengan situasi mana ' +
-    'tetaplah tebakan kami.',
-  '',
-  'Terakhir: delapan skormu berasal dari kuis hobi tanpa bukti yang diterbitkan bahwa kuis ' +
-    'itu bekerja. Orang sering mendapat hasil yang berbeda saat mengulangnya.',
-].join('\n');
-
 /** Everyday Indonesian words for each habit, so the FLAT report names no bare codes. */
 const PLAIN_FLAT_ID: Readonly<Record<FunctionKey, string>> = {
   Ni: 'firasatmu tentang ke mana segala sesuatu mengarah',
@@ -208,18 +169,15 @@ const PLAIN_FLAT_ID: Readonly<Record<FunctionKey, string>> = {
 };
 
 /**
- * The Indonesian FLAT report: same structure and facts as the English builder
- * in assemble.ts (two canonical headings, provenance, the honest null, the one
- * licensed watch item, next steps, the verbatim disclaimer).
+ * The Indonesian FLAT report: same structure as the English builder in
+ * assemble.ts (the limits heading, the honest null, the one licensed watch
+ * item, next steps, the verbatim disclaimer). The provenance section was
+ * removed; attribution rides the disclaimer's own community-writing line.
  */
 export function buildHonestNullReportId(signature: Signature): string {
   const watch = signature.watchItem;
   const lines: string[] = [
     REPORT_HEADINGS_ID[4],
-    '',
-    FRAMEWORK_PROVENANCE_TEXT_ID,
-    '',
-    REPORT_HEADINGS_ID[5],
     '',
     'Kedelapan jawabanmu keluar sangat berdekatan. Perbedaan di antaranya terlalu kecil ' +
       'untuk bisa dibaca dengan jelas oleh kuis ini. Kami tidak bisa menulis laporan yang ' +

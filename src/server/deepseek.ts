@@ -31,12 +31,17 @@ import { createPreludeSplitter } from './prelude';
 export const DEFAULT_MODEL = 'deepseek-v4-flash';
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 /**
- * OpenRouter primary defaults. The free deepseek-v4-flash slug is the intended primary;
- * DeepSeek direct (above) is the paid fallback. Both endpoints are OpenAI-compatible, so
- * the same SDK client serves either with a different key, base URL, and model id — only
- * the reasoning dialect differs (buildChatRequest keys that on the provider `kind`).
+ * OpenRouter primary defaults. deepseek-v4-flash:free was retired by OpenRouter (it 404s
+ * with "use deepseek/deepseek-v4-flash", the paid slug), and no DeepSeek :free variant
+ * remains, so the free primary is minimax-m3 — measured (2026-08-27) the strongest FREE
+ * model still reliably available that follows the report contract (plain B1 language, no
+ * em-dashes, clean en/id). DeepSeek direct (above) is the paid fallback for when the free
+ * tier rate-limits (routine on free models). Override either with OPENROUTER_MODEL /
+ * OPENROUTER_BASE_URL. Both endpoints are OpenAI-compatible, so the same SDK client serves
+ * either with a different key, base URL, and model id — only the reasoning dialect differs
+ * (buildChatRequest keys that on the provider `kind`).
  */
-export const OPENROUTER_DEFAULT_MODEL = 'deepseek/deepseek-v4-flash:free';
+export const OPENROUTER_DEFAULT_MODEL = 'minimax/minimax-m3:free';
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 export const TEMPERATURE = 0.5;
 // Total wall-clock budget per attempt. Sized for the native-thinking fallback path: at
@@ -778,6 +783,14 @@ function describe(error: unknown, timedOut: boolean): DeepSeekError {
   if (typeof status === 'number' && Number.isFinite(status) && status >= 500) {
     const message = 'The report generator is having trouble upstream. Try again shortly.';
     return new DeepSeekError(message, { status, retryable: true, publicMessage: message });
+  }
+  // Other 4xx (404 retired/unknown model, 400 bad request, 422, ...) are client-side and
+  // will not change on retry. 401/403 and 429 are already handled above; everything else in
+  // the range is non-retryable, so the failover wrapper hands off to the next provider at
+  // once instead of burning the retry budget on a dead endpoint (e.g. a retired model slug).
+  if (typeof status === 'number' && Number.isFinite(status) && status >= 400 && status < 500) {
+    const message = 'The report generator rejected the request. Please try again later.';
+    return new DeepSeekError(message, { status, retryable: false, publicMessage: message });
   }
   if (error instanceof DeepSeekError) return error;
 

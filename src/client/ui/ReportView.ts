@@ -1,5 +1,5 @@
 /**
- * Sections 2-7 of the report (05 §5.1), streamed from the server into one
+ * Sections 2-6 of the report (05 §5.1), streamed from the server into one
  * card each.
  *
  * The stream arrives as markdown fragments at arbitrary boundaries, so the text
@@ -30,14 +30,13 @@ import {
 
 /**
  * The exact section headings the server emits, in the order it emits them
- * (05 §5.1, sections 2-7; section 1 is code-rendered by SignatureView).
+ * (05 §5.1, sections 2-6; section 1 is code-rendered by SignatureView).
  */
 export const SECTION_TITLES: readonly string[] = [
   'How your mind tends to work',
   'How you handle different situations',
   'When things get stressful',
   'Things you can try',
-  'Where this report comes from',
   "What this report can't tell you",
 ];
 
@@ -51,7 +50,6 @@ export const SECTION_TITLES_ID: readonly string[] = [
   'Cara kamu menghadapi berbagai situasi',
   'Saat keadaan penuh tekanan',
   'Hal yang bisa kamu coba',
-  'Dari mana laporan ini berasal',
   'Apa yang tidak bisa dikatakan laporan ini',
 ];
 

@@ -113,7 +113,6 @@ export type RenderMode =
   | 'summary-line';
 
 export type FeatureKind =
-  | 'provenance'
   | 'weak-signal'
   | 'shadow-cliff'
   | 'eruption-watch'
@@ -135,7 +134,7 @@ export interface RenderFeature {
   kind: FeatureKind;
   /** One line naming the feature, in the report's own vocabulary. */
   title: string;
-  /** Which report section this feature is rendered in (2-7; 1 is code-rendered). */
+  /** Which report section this feature is rendered in (2-6; 1 is code-rendered). */
   section: 2 | 3 | 4 | 5 | 6 | 7;
   /** 05 §5.1 salience: cliffs < circuits < axes < lead shapes < balanced/quiet. */
   salience: number;
@@ -211,8 +210,8 @@ export interface Assembly {
    */
   userPromptNoPlan: string | null;
   /**
-   * The line prefixes that mark the report's start; the prelude splitter keys on them.
-   * On LLM paths: '# ' (the headline line) plus this language's exact canonical headings.
+   * Exact canonical headings for this language; the prelude splitter keys on them. The
+   * `# ` headline line is handled inside the splitter itself, never listed here.
    */
   reportHeadings: string[];
   /** Completion cap sized to the render plan's word budget (05 §5.1). */
@@ -442,8 +441,8 @@ const ESCALATION_OVERLAY: readonly string[] = [
 ];
 
 /**
- * The six English headings the client's cards are keyed to, in order. Exact strings: the
- * client matches on them. Sections 2-7 of the report; section 1 is code-rendered. The
+ * The five English headings the client's cards are keyed to, in order. Exact strings: the
+ * client matches on them. Sections 2-6 of the report; section 1 is code-rendered. The
  * canonical definition (with its Indonesian counterpart) lives in ./language.ts.
  */
 export const REPORT_HEADINGS = REPORT_HEADINGS_EN;
@@ -716,7 +715,6 @@ export function assemblePrompt(
     // words come from the theory and from composition rather than from filler.
     if (
       (built.mode === 'full' || built.mode === 'fork') &&
-      built.kind !== 'provenance' &&
       built.kind !== 'weak-signal' &&
       built.kind !== 'scenarios'
     ) {
@@ -744,8 +742,7 @@ export function assemblePrompt(
       mergedFrom: [],
       instructions: [
         'This profile resolves little, so the honest output is SHORT. Do not stretch it: the ' +
-          'length rules for a resolved profile do not apply, and section 6 (provenance) is the ' +
-          'only part that runs at full length here.',
+          'length rules for a resolved profile do not apply, and every section stays brief.',
         'No adjacent rank in this profile is real: no tier boundary exists, so no tiers, ' +
           'no circuit, no shapes, no eruption candidates may be named.',
         `The ONLY licensed content is the contrast between the habits you use most (${fnList(upper)}) ` +
@@ -796,20 +793,6 @@ export function assemblePrompt(
     );
   }
 
-  // Section 6, every LLM path: how the reading was made. Framework, not profile.
-  push({
-    id: 'provenance',
-    kind: 'provenance',
-    title: 'Where this report comes from (framework provenance)',
-    section: 6,
-    salience: 90,
-    mode: 'full',
-    forkRequired: false,
-    functions: [],
-    mergedFrom: [],
-    instructions: provenanceInstructions(),
-  }, 400);
-
   const renderPlan = orderPlan(features);
   const fragmentKeys = selection.keys();
   const fragments = resolve(fragmentKeys);
@@ -848,10 +831,10 @@ export function assemblePrompt(
     systemPrompt: fullSystemPrompt(),
     userPrompt: buildUserPrompt({ ...promptInput, plan: prompted }),
     userPromptNoPlan: prompted ? buildUserPrompt({ ...promptInput, plan: false }) : null,
-    // '# ' first: the headline line opens the report, so the prelude splitter treats it
-    // as the plan/report boundary. Safe as a bare prefix because plan lines are forbidden
-    // from starting with '#' (PLANNING_PASS_INSTRUCTIONS).
-    reportHeadings: ['# ', ...headingsFor(language)],
+    // Canonical headings only. The headline line (`# `) is NOT listed here: it is a
+    // conditional boundary the splitter handles internally (prelude.ts) — a bare `# `
+    // prefix in this list once reclassified a whole misplaced plan as report content.
+    reportHeadings: [...headingsFor(language)],
     // Output budget (~2.2 tokens/word + slack) PLUS a reasoning allowance sized to the
     // active mode (reasoning bills against the same max_tokens as the report): a wide one
     // for native thinking, a small one for the capped prompted plan, none for `none`.
@@ -1386,46 +1369,6 @@ function orderPlan(features: RenderFeature[]): RenderFeature[] {
     .map((entry) => entry.feature);
 }
 
-/* ------------------------------------------------------------------ *
- * Friction instruction
- * ------------------------------------------------------------------ */
-
-/**
- * Section 6. Framework provenance, not profile content: the same facts the reader-facing
- * static text below carries, handed to the model as instructions so it can write them in
- * this report's own voice and reading level.
- */
-function provenanceInstructions(): string[] {
-  return [
-    '300-500 words. This section says nothing about the person. It explains where ' +
-      'the method comes from and what we did with it. No numbers, no predictions.',
-    'Sources (community ideas): we took ideas from four guides on ' +
-      'mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, ' +
-      'Type Spotting) and from Naomi Quenk\'s "grip" idea. These are personality-community ' +
-      'writing. They have never been tested by science. Say that plainly.',
-    'What we changed (our guess): those sources tie their patterns to 16 fixed types. ' +
-      'We kept the patterns but read them from the person\'s quiz scores instead. We look ' +
-      'at the gaps between scores, and we ignore the fixed type order. Real quiz results ' +
-      'almost never match one of the 16 classic orders (only 16 out of 40,320 possible ' +
-      'orders are "classic"). This change is our own guess. It has never been tested.',
-    'Why we give no type label: eight separate scores tell more than 16 boxes. Published ' +
-      'research rejected fixed function order (Reynierse 2009). A type label would be a ' +
-      'claim we cannot back up.',
-    'What rests on real science: the "if this situation, then this response" idea comes ' +
-      'from Mischel and Shoda (1995). The finding that people move through many states ' +
-      'comes from Fleeson (2001). The if-then shape is real science. Every guess about ' +
-      'which habit fits which situation is still ours.',
-    'Be honest about the input: the eight scores come from a hobby quiz that has never ' +
-      'been tested for accuracy. People often get different results on retake.',
-    'Use the simplest words possible. Keep sentences under 15 words. ' +
-      'Say "this tool" or "this method" or "the quiz," never "pipeline" or "framework" or ' +
-      '"instrument" or "validity evidence." Say "your answers" or "your results," never ' +
-      '"your scores" or "ranked." The disclaimer block at the end is fixed. Copy it ' +
-      'exactly as given. Keep confidence levels clear here too. This section is where the ' +
-      'reader learns which parts are science and which are our guesses.',
-  ];
-}
-
 /**
  * Section 3. The report invents its own situations and predicts behaviour in each, which
  * is what "if a certain scenario, how does this person tend to behave" asks for.
@@ -1502,52 +1445,12 @@ function scenarioInstructions(scenarios: readonly Scenario[]): string[] {
  * ------------------------------------------------------------------ */
 
 /**
- * Reader-facing provenance explainer, plain language, static. The model writes its own
- * version of this for section 6 of an LLM report; a FLAT report has no model in the loop,
- * so it ships this text verbatim instead. Same facts either way.
- *
- * Contains no type codes, no clinical vocabulary and no claim about the reader, so it
- * passes `auditReport` unchanged.
- */
-export const FRAMEWORK_PROVENANCE_TEXT = [
-  'We built this report from a small set of sources. Some are strong. Some are not. Here is what comes from where.',
-  '',
-  'Most of the ideas come from personality-community writing. Four guides on ' +
-    'mbti-notes.tumblr.com (Type Fundamentals, Function Theory, Type Development, ' +
-    'Type Spotting) and Naomi Quenk\'s idea of the "grip." These writers deserve credit. ' +
-    'But none of this has been tested by science.',
-  '',
-  'Those sources describe patterns they call "loops" and "grips." These are about which ' +
-    'mental habits you use together, which you avoid, and which come out when you are tired. ' +
-    'The original sources tie these patterns to 16 fixed types.',
-  '',
-  'We did something different. We kept the patterns but stopped tying them to fixed types. ' +
-    'Instead, we read them from your quiz scores. We look at the gaps between your numbers. ' +
-    'We do this because real scores almost never match one of the 16 fixed orders. There are ' +
-    '40,320 possible orders, and only 16 are the "classic" ones. This change is our own ' +
-    'guess. It has never been tested.',
-  '',
-  'That is also why we give you no four-letter type label. Eight separate scores tell us ' +
-    'more than one box out of 16. Published research also rejected the idea of a fixed ' +
-    'order (Reynierse, 2009). A type label would be a claim we cannot back up.',
-  '',
-  'One part of this report does rest on real science. The idea that people act in ' +
-    '"if this situation, then this response" patterns comes from Mischel and Shoda (1995). ' +
-    'The finding that people move through many states, not just one fixed personality, comes ' +
-    'from Fleeson (2001). That is why this report does not describe you in general. It ' +
-    'builds specific situations and guesses how you would act in each one. The "if-then" ' +
-    'shape is real science. Every guess about which habit fits which situation is still ours.',
-  '',
-  'Last: your eight scores come from a hobby quiz with no published proof that it works. ' +
-    'People often get different results when they take it again.',
-].join('\n');
-
-/**
  * No LLM, no trait content. The single largest gap is the only structure a FLAT profile
  * may name, and it is named as a tentative watch item (02 §2 step 0).
  *
- * Two of the canonical headings, so the client's cards still match: the provenance
- * explainer (real content, no lie in it) and then the limits plus the disclaimer.
+ * One canonical heading, so the client's cards still match: the limits section and the
+ * verbatim disclaimer. The provenance section was removed; attribution rides the
+ * disclaimer's own community-writing line.
  */
 export function buildHonestNullReport(signature: Signature): string {
   const watch = signature.watchItem;
@@ -1564,10 +1467,6 @@ export function buildHonestNullReport(signature: Signature): string {
   };
   const lines: string[] = [
     REPORT_HEADINGS[4],
-    '',
-    FRAMEWORK_PROVENANCE_TEXT,
-    '',
-    REPORT_HEADINGS[5],
     '',
     'Your eight answers came out very close together. The differences between them are too ' +
       'small for this quiz to read clearly. We cannot write a useful report from these results. ' +
@@ -1683,7 +1582,7 @@ const PLANNING_PASS_INSTRUCTIONS: readonly string[] = [
   '6. ARC AND CLOSE. State the through-line in one sentence: the one thing this ' +
     'signature is about, which every section should serve. Then: which composition anchors ' +
     'section 2; which experiment in section 5 tests which named hypothesis from sections ' +
-    '2-4 (every lever must trace back to one); and how section 7 names the limits without ' +
+    '2-4 (every lever must trace back to one); and how section 6 names the limits without ' +
     'taking back what the report actually said.',
   'Plan budget: 500-900 words, never more than 1200. Spend the depth on stages 3 and 5. ' +
     'Plain prose lines and list numbers only: no markdown headings, no line starting with ' +
@@ -1847,7 +1746,12 @@ function buildUserPrompt(input: UserPromptInput): string {
     out.push('');
   }
   out.push(
-    'HEADLINE. The report\'s very first line is exactly one line of the form `# <headline>` ' +
+    'HEADLINE. Immediately before the first canonical heading' +
+      (plan
+        ? " — that is, after the planning pass ends; the headline is the report's first " +
+          "line, NEVER your output's first line and never inside the plan"
+        : '') +
+      ', write exactly one line of the form `# <headline>` ' +
       '(one `#`, one space), followed by a blank line, then the first canonical heading. ' +
       'Write it the way a front-page newspaper headline is written: one short declarative ' +
       'sentence that captures the whole report\'s central finding about this person, so ' +
@@ -1859,7 +1763,7 @@ function buildUserPrompt(input: UserPromptInput): string {
   );
   out.push('');
   out.push(
-    'Write Sections 2–7 ONLY. Section 1 is rendered client-side from the Signature above; ' +
+    'Write Sections 2–6 ONLY. Section 1 is rendered client-side from the Signature above; ' +
       'do not restate it. Use EXACTLY these markdown headings, in this order, with nothing ' +
       'before the first one except ' +
       (plan ? 'the planning pass described above and ' : '') +

@@ -40,9 +40,15 @@ reader-facing inaccuracy warning; model-written headline).
   labels, colons, or em-dashes. Instruction lives in `buildUserPrompt` (both the planned
   and no-plan variants); the planning-pass close line now names the headline as the
   report's first line.
-- Prompted-reasoning splitter: `assembly.reportHeadings` gains `'# '` as its first entry,
-  so the headline line is the plan/report boundary. Safe because plan lines are forbidden
-  from starting with `#`. FLAT keeps canonical-only headings (no model, no headline).
+- Prompted-reasoning splitter: `reportHeadings` stays canonical-only. The `# ` line is a
+  CONDITIONAL boundary handled inside `prelude.ts`: a complete `# ` line (plus blank
+  lines under it) is held and becomes content only when the first canonical heading
+  follows; anything else demotes it to thinking. A headline the model wrote too early
+  (before its plan) is remembered and replayed as content at the true boundary, so the
+  title survives. (Revised 2026-08-27: the first cut listed `'# '` as an unconditional
+  boundary prefix, so an early or stray `# ` line reclassified the whole plan as report
+  content — plan on the page, empty murmur. The headline prompt is also position-bound
+  now: "immediately before the first canonical heading, after the planning pass ends".)
 - Client (`ReportView`):
   - `couldContinueHeading` also withholds a streaming tail that starts `# ` (or is `#`),
     so a half-arrived headline is never painted as prose.

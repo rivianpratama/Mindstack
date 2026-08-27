@@ -216,12 +216,10 @@ describe('POST /api/generate — prompted-reasoning wiring to streamReport', () 
       await post(PROFILE_A);
       const request = control.requests.at(-1)!;
       expect(request.reportHeadings).toEqual([
-        '# ',
         '## How your mind tends to work',
         '## How you handle different situations',
         '## When things get stressful',
         '## Things you can try',
-        '## Where this report comes from',
         "## What this report can't tell you",
       ]);
       expect(request.user).toContain('PLANNING PASS');
@@ -237,9 +235,8 @@ describe('POST /api/generate — prompted-reasoning wiring to streamReport', () 
       ];
       await post(PROFILE_A, { language: 'id' });
       const request = control.requests.at(-1)!;
-      expect((request.reportHeadings as string[])[0]).toBe('# ');
-      expect((request.reportHeadings as string[])[1]).toBe('## Cara pikiranmu biasanya bekerja');
-      expect(request.reportHeadings as string[]).toHaveLength(7);
+      expect((request.reportHeadings as string[])[0]).toBe('## Cara pikiranmu biasanya bekerja');
+      expect(request.reportHeadings as string[]).toHaveLength(5);
     });
   });
 
@@ -291,7 +288,8 @@ describe('POST /api/generate — report language', () => {
       .filter((f) => f.event === 'chunk')
       .map((f) => JSON.parse(f.data).text as string)
       .join('');
-    expect(chunkText).toContain('## Dari mana laporan ini berasal');
+    expect(chunkText).not.toContain('## Dari mana laporan ini berasal');
+    expect(chunkText).toContain('## Apa yang tidak bisa dikatakan laporan ini');
     expect(chunkText).toContain('Apa ini dan apa yang bukan.');
     expect(chunkText).not.toContain('What this is and is not.');
     // The block's own "diagnosis" must not self-flag: the strip works end to end.
