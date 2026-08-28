@@ -248,3 +248,47 @@ Gemini prompted-plan-then-truncate → failover path is added.
 Note on the transient Gemini instability itself: the truncations and 503s are provider-side
 load/preview instability, exactly what failover absorbs. With this fix a flaky primary degrades
 to "fails over to a healthy fallback" rather than "hard error."
+
+### Correction (2026-08-28, live test): Gemini shows its thoughts; the app unwraps `<thought>`
+
+**Supersedes** the "Provider-aware request body: `kind: 'gemini'`" thinking-off setting
+(`include_thoughts: false`) and the "Reasoning reader: unchanged" claim above.
+
+Symptom: with Gemini primary, the report streamed but the custom planning "thinking" murmur never
+appeared. Root cause, found by live probe:
+
+1. The prompted design assumes "native thinking OFF → the model writes the scripted plan in the
+   content stream → the prelude splitter re-tags it as thinking." That holds for DeepSeek and
+   OpenRouter, whose thinking is genuinely off. **Gemini cannot turn thinking off**, so it plans
+   in its hidden native channel and (model- and run-dependent) writes only the report as content
+   — the splitter sees the report heading immediately and emits **zero** thinking. Panel empty.
+2. Even the explicit-level path was latently broken: Gemini's OpenAI-compat layer does **not**
+   put thoughts in `reasoning_content`/`reasoning`. It **inlines them in `delta.content`, wrapped
+   in a literal `<thought>...</thought>` block** (verified live against gemini-2.5-flash-lite;
+   the framing is applied by the compat layer, so it is model-agnostic). The reasoning reader
+   therefore never saw them, and with `include_thoughts: true` the raw tags would have leaked
+   into the report buffer that guards and the disclaimer audit.
+
+**Fix:**
+
+- `buildChatRequest` (`kind: 'gemini'`): `include_thoughts` is now **true whenever
+  thinking_config is sent** (both the thinking-off floor and explicit levels). Since thinking
+  can't be off, showing the thoughts is the only way to give the reader a reasoning stream; the
+  thinking-level floor ('low') still keeps it bounded.
+- New leaf module **`src/server/gemini-thoughts.ts`** (`createThoughtUnwrapper`): a pure,
+  streaming peeler that routes `<thought>...</thought>` interior to `thinking`, strips the marker
+  tags, and passes the rest through as `content` — handling markers split across arbitrary delta
+  boundaries, and acting as a transparent pass-through when no `<thought>` appears (so no model or
+  path regresses). `streamOneProvider` runs Gemini content deltas through it **before** the
+  prelude splitter, so the plan/report boundary is judged on report text only and a heading quoted
+  inside a thought can't false-trigger it. The scripted plan, when the model also writes one,
+  still splits off on top.
+
+Net effect: the murmur now shows Gemini's real (bounded) reasoning as the Gemini-native analogue
+of the scripted planning pass, robustly — regardless of whether the model writes a visible plan.
+Tests: new `test/gemini-thoughts.test.ts` (unwrapper across hostile boundaries) plus a
+`test/deepseek.failover.test.ts` case proving inline `<thought>` content surfaces as thinking and
+never reaches the report; the two request-shape tests that pinned `include_thoughts: false` now
+assert `true`. `npm test` (351) and `npm run typecheck` green.
+
+Sources: live probe of `https://generativelanguage.googleapis.com/v1beta/openai/` (2026-08-28).

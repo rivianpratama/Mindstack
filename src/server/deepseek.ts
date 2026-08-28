@@ -22,11 +22,20 @@
  * `classifyStreamOutcome`). Native thinking remains available via
  * DEEPSEEK_REASONING_EFFORT=low/high/max/default; `none` is the fast no-reasoning pass
  * (no thinking, no plan).
+ *
+ * GEMINI is the exception the prompted design does not fit: it CANNOT turn thinking off, so
+ * the "thinking off + scripted plan in content" contract above breaks — the model plans in its
+ * hidden channel and the plan stream never appears. The Gemini branch therefore SHOWS its
+ * native thoughts (include_thoughts), which arrive inline in `content` wrapped in
+ * `<thought>...</thought>` (Gemini has no separate reasoning field); createThoughtUnwrapper
+ * (gemini-thoughts.ts) peels them back onto the same `thinking` event, and the prompted plan,
+ * when the model also writes one, still splits off on top.
  */
 
 import OpenAI from 'openai';
 
 import { createPreludeSplitter } from './prelude';
+import { createThoughtUnwrapper } from './gemini-thoughts';
 
 export const DEFAULT_MODEL = 'deepseek-v4-flash';
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
@@ -49,7 +58,9 @@ export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
  * reasoning dialect (buildChatRequest keys that on the provider `kind`). The default model is
  * gemini-3.7-flash; override with GEMINI_MODEL / GEMINI_BASE_URL. NOTE: Gemini 3 models cannot
  * fully disable thinking; the thinking-off path asks for the LOWEST level the model accepts
- * (see GEMINI_MIN_THINKING_LEVEL) with thoughts hidden — as close to off as the model allows.
+ * (see GEMINI_MIN_THINKING_LEVEL) — as close to off as the model allows. Because thinking can't
+ * be off, the thoughts are SHOWN (include_thoughts) and streamed to the reader rather than
+ * hidden; see buildChatRequest and gemini-thoughts.ts.
  */
 export const GEMINI_DEFAULT_MODEL = 'gemini-3.7-flash';
 export const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
@@ -57,9 +68,10 @@ export const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.co
  * The lowest `thinking_level` gemini-3.7-flash accepts. It REJECTS 'minimal' outright —
  * `400 INVALID_ARGUMENT: "Thinking level MINIMAL is not supported for this model"` (verified
  * live 2026-08-28, the cause of Gemini failing over on every request) — so 'low' is the floor.
- * This is the thinking-off level: the least thinking the model allows, with thoughts hidden. If
- * a future default model accepts 'minimal', lower this. (`reasoning_effort:'none'`, which does
- * disable thinking, is a Gemini-2.5-only path and is not what this thinking_config route uses.)
+ * This is the thinking-off level: the least thinking the model allows (thoughts are still shown,
+ * because thinking can't be turned off). If a future default model accepts 'minimal', lower
+ * this. (`reasoning_effort:'none'`, which does disable thinking, is a Gemini-2.5-only path and
+ * is not what this thinking_config route uses.)
  */
 export const GEMINI_MIN_THINKING_LEVEL = 'low';
 export const TEMPERATURE = 0.5;
@@ -427,8 +439,14 @@ export interface ChatRequestInput {
  *     (Gemini's own OpenAI-compat escape hatch for provider-specific params). Gemini 3
  *     CANNOT fully disable thinking, so the thinking-off paths (none/prompted) ask for the
  *     lowest level the model accepts (GEMINI_MIN_THINKING_LEVEL; gemini-3.7-flash rejects
- *     'minimal') with thoughts hidden; an explicit level maps to thinking_level (max → high,
- *     Gemini's ceiling) with thoughts shown; the server default omits the knob.
+ *     'minimal'); an explicit level maps to thinking_level (max → high, Gemini's ceiling); the
+ *     server default omits the knob. `include_thoughts` is ALWAYS true when thinking_config is
+ *     sent: because thinking can't be turned off, hiding the thoughts (the old off-path
+ *     setting) produced a report with NO visible reasoning — the model planned in its hidden
+ *     channel and the prompted planning stream never appeared (the "Gemini shows no thinking"
+ *     defect). With thoughts shown, Gemini inlines them in `delta.content` as
+ *     `<thought>...</thought>` (NOT a separate reasoning field), which the stream reader peels
+ *     back out via createThoughtUnwrapper (gemini-thoughts.ts).
  *     Neither `reasoning_effort` (mutually exclusive with thinking_config) nor DeepSeek's
  *     `thinking`/OpenRouter's `reasoning` ever rides a Gemini call.
  * All three share sampling, streaming, the token cap, and the messages, so those are built once.
@@ -459,12 +477,15 @@ export function buildChatRequest(input: ChatRequestInput) {
   }
 
   if (input.kind === 'gemini') {
-    // thinking off (none/prompted) → the lowest level the model accepts, thoughts hidden
-    // (gemini-3.7-flash rejects 'minimal'; GEMINI_MIN_THINKING_LEVEL is 'low', its floor); an
-    // explicit level → thinking_level (max → high, the ceiling) with thoughts shown; the server
-    // default (null) → omit thinking_config so Gemini applies its own dynamic thinking.
+    // thinking off (none/prompted) → the lowest level the model accepts (gemini-3.7-flash
+    // rejects 'minimal'; GEMINI_MIN_THINKING_LEVEL is 'low', its floor); an explicit level →
+    // thinking_level (max → high, the ceiling); the server default (null) → omit thinking_config
+    // so Gemini applies its own dynamic thinking. include_thoughts is true whenever thinking_config
+    // is sent: Gemini can't stop thinking, so hiding the thoughts just yields a report with no
+    // visible reasoning (the thinking panel never shows). Shown, the thoughts arrive inline in
+    // delta.content as <thought>...</thought> and the stream reader unwraps them.
     const thinkingConfig = !thinkingOn
-      ? { thinking_level: GEMINI_MIN_THINKING_LEVEL, include_thoughts: false }
+      ? { thinking_level: GEMINI_MIN_THINKING_LEVEL, include_thoughts: true }
       : effort !== null
         ? { thinking_level: effort === 'max' ? 'high' : effort, include_thoughts: true }
         : null;
@@ -613,6 +634,8 @@ export async function* streamReport(request: StreamRequest): AsyncGenerator<Stre
  * disclaimer see:
  *   - reasoning deltas — `reasoning_content` (DeepSeek) or `reasoning` (OpenRouter),
  *     surfaced and counted;
+ *   - Gemini's inline thoughts — `<thought>...</thought>` inside `content` (Gemini has no
+ *     separate reasoning field), peeled out by the thought unwrapper (gemini-thoughts.ts);
  *   - in prompted mode, the planning pass: content deltas before the first canonical
  *     heading, re-tagged by the prelude splitter (see prelude.ts and reportHeadings).
  */
@@ -650,6 +673,27 @@ async function* streamOneProvider(
     let finishReason: string | null = null;
     // Recreated per attempt: a retry starts a fresh stream with its own plan boundary.
     const splitter = prompted ? createPreludeSplitter(request.reportHeadings!) : null;
+    // Gemini streams its native thoughts inline in `content`, wrapped in <thought>...</thought>
+    // (it has no separate reasoning field; see gemini-thoughts.ts). Peel those to `thinking`
+    // BEFORE the splitter so the plan/report boundary is judged on report text only. Other
+    // providers keep the identity path. Recreated per attempt like the splitter.
+    const thoughts = provider.kind === 'gemini' ? createThoughtUnwrapper() : null;
+    // Route unwrapper output: thinking segments forward as-is (they never touch the splitter, so
+    // a heading quoted inside a thought can't false-trigger the boundary); content segments run
+    // through the prelude splitter (prompted) or straight to content.
+    const routeSegments = (segments: readonly StreamReportItem[]): StreamReportItem[] => {
+      const out: StreamReportItem[] = [];
+      for (const seg of segments) {
+        if (seg.kind === 'thinking') out.push(seg);
+        else if (splitter) out.push(...splitter.push(seg.text));
+        else out.push(seg);
+      }
+      return out;
+    };
+    // One content delta → forwardable items: unwrap Gemini's inline <thought> tags first, then
+    // route. Other providers have no unwrapper, so the delta is one content segment.
+    const processContent = (raw: string): StreamReportItem[] =>
+      routeSegments(thoughts ? thoughts.push(raw) : [{ kind: 'content', text: raw }]);
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), TIMEOUT_MS);
     const signal = composeSignals(timeout.signal, request.signal);
@@ -708,12 +752,10 @@ async function* streamOneProvider(
 
         const delta = choice.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) {
-          // In prompted mode the splitter re-tags the plan as thinking; it is a
-          // pass-through once the report's first heading has been seen.
-          const pieces: StreamReportItem[] = splitter
-            ? splitter.push(delta)
-            : [{ kind: 'content', text: delta }];
-          for (const item of pieces) {
+          // Gemini's inline thoughts are peeled to `thinking`; in prompted mode the splitter
+          // then re-tags the plan as thinking (a pass-through once the report's first heading
+          // has been seen). Other providers pass through untouched.
+          for (const item of processContent(delta)) {
             if (item.kind === 'content') contentChars += item.text.length;
             else reasoningChars += item.text.length;
             yielded = true;
@@ -734,9 +776,14 @@ async function* streamOneProvider(
         }
       }
 
-      // The stream ended with the splitter still holding a partial line: plan tail.
-      if (runaway === null && splitter) {
-        for (const item of splitter.flush()) {
+      // Drain the tails, in stream order. The thought unwrapper may hold a partial marker whose
+      // resolved text still has to pass through the splitter; the splitter may then hold a
+      // partial plan line. Flush the unwrapper first so its residue reaches the splitter.
+      if (runaway === null) {
+        const tail: StreamReportItem[] = [];
+        if (thoughts) tail.push(...routeSegments(thoughts.flush()));
+        if (splitter) tail.push(...splitter.flush());
+        for (const item of tail) {
           if (item.kind === 'content') contentChars += item.text.length;
           else reasoningChars += item.text.length;
           yielded = true;

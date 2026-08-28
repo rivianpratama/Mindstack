@@ -274,16 +274,18 @@ describe('buildChatRequest per provider kind', () => {
     ]);
   });
 
-  it('translates Gemini thinking-off to the lowest accepted level (low), thoughts hidden', () => {
+  it('translates Gemini thinking-off to the lowest accepted level (low), thoughts SHOWN', () => {
     for (const effort of ['none', 'prompted', '']) {
       const request = buildChatRequest({ ...base, kind: 'gemini', reasoningEffort: effort }) as Record<
         string,
         unknown
       >;
       // Gemini 3 cannot fully disable thinking, and gemini-3.7-flash REJECTS 'minimal' (400,
-      // verified live 2026-08-28); 'low' is its floor. Thoughts stay hidden on the off path.
+      // verified live 2026-08-28); 'low' is its floor. Because thinking can't be turned off,
+      // the thoughts are SHOWN (include_thoughts: true) and unwrapped from the content stream —
+      // hiding them left the reader with a report and no planning stream (the fixed defect).
       expect(request.extra_body, `"${effort}" must send native thinking_config`).toEqual({
-        google: { thinking_config: { thinking_level: 'low', include_thoughts: false } },
+        google: { thinking_config: { thinking_level: 'low', include_thoughts: true } },
       });
       // Never the OpenAI reasoning_effort knob (mutually exclusive with thinking_config), and
       // never the DeepSeek `thinking` or OpenRouter `reasoning` fields.
@@ -667,10 +669,56 @@ describe('streamReport failover across providers', () => {
     const body = createSpy.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(body.model).toBe(GM_MODEL);
     expect(body.extra_body).toEqual({
-      google: { thinking_config: { thinking_level: 'low', include_thoughts: false } },
+      google: { thinking_config: { thinking_level: 'low', include_thoughts: true } },
     });
     expect('reasoning_effort' in body).toBe(false);
     expect('thinking' in body).toBe(false);
+  });
+
+  it('unwraps Gemini <thought> content into the thinking stream, keeping the report clean', async () => {
+    // Gemini can't stop thinking; with thoughts shown it inlines them in `content` wrapped in
+    // <thought>...</thought> (no separate reasoning field). The unwrapper must peel those onto
+    // the `thinking` event so the planning stream shows, and the report must NOT carry the tags.
+    const HEADING = '## How your mind tends to work';
+    const BODY = 'A real report paragraph, long enough to count as content. '.repeat(6);
+    process.env.GEMINI_API_KEY = 'sk-gm-stub';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'prompted';
+    byModel = {
+      [GM_MODEL]: [
+        {
+          chunks: [
+            // A thought block split across deltas (the </thought> tag straddles a boundary),
+            // then the real report — exactly the shape the live endpoint streams.
+            chunk({ content: '<thought>Weighing the Ni spike against the Fe cliff.</thou' }),
+            chunk({ content: `ght>${HEADING}\n\n${BODY}` }),
+            chunk({}, 'stop'),
+          ],
+        },
+      ],
+    };
+
+    const items: StreamReportItem[] = [];
+    for await (const item of streamReport({
+      system: 'sys',
+      user: 'usr-with-plan',
+      fallbackUser: 'usr-no-plan',
+      reportHeadings: [HEADING],
+    })) {
+      items.push(item);
+    }
+
+    const thinking = items.filter((i) => i.kind === 'thinking').map((i) => i.text).join('');
+    const content = items.filter((i) => i.kind === 'content').map((i) => i.text).join('');
+    expect(thinking).toContain('Weighing the Ni spike against the Fe cliff.');
+    // The tags are stripped from BOTH streams; the report is clean.
+    expect(thinking).not.toContain('<thought>');
+    expect(thinking).not.toContain('</thought>');
+    expect(content).toContain(HEADING);
+    expect(content).not.toContain('<thought>');
+    expect(content).not.toContain('</thought>');
+    expect(content).not.toContain('Weighing the Ni spike');
+    // Only Gemini ran; the thought stream did not defeat the report.
+    expect(createSpy.mock.calls.map((c) => (c[0] as { model: string }).model)).toEqual([GM_MODEL]);
   });
 
   it('constructs the Gemini client at its endpoint with no attribution headers', async () => {
