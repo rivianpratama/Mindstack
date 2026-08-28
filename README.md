@@ -11,14 +11,17 @@ A set of hypotheses with the math shown — explicitly **not** a 16-type label.
 [![Hono](https://img.shields.io/badge/Hono-API-E36002?logo=hono&logoColor=white)](src/server/app.ts)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?logo=tailwindcss&logoColor=white)](package.json)
 [![Vitest](https://img.shields.io/badge/tested_with-Vitest-6E9F18?logo=vitest&logoColor=white)](test)
-[![Deploys on Vercel](https://img.shields.io/badge/deploys_on-Vercel-000000?logo=vercel&logoColor=white)](vercel.json)
+[![Live on Vercel](https://img.shields.io/badge/live-themindstack.vercel.app-000000?logo=vercel&logoColor=white)](https://themindstack.vercel.app)
+
+### [✨ Try it live → themindstack.vercel.app](https://themindstack.vercel.app)
 
 [Getting started](#-getting-started) ·
 [How it works](#-how-it-works) ·
 [Configuration](#-configuration) ·
 [Development](#-development) ·
 [Deployment](#-deployment) ·
-[Design rules](#-where-the-rules-live)
+[Design rules](#-where-the-rules-live) ·
+[Attribution](#-attribution)
 
 </div>
 
@@ -42,6 +45,10 @@ Mindstack does the opposite:
   work — only the interpreted prose needs a provider.
 
 ## 🚀 Getting started
+
+No install needed to try it — it's live at **[themindstack.vercel.app](https://themindstack.vercel.app)**.
+
+To run it locally:
 
 ```bash
 git clone https://github.com/rivianpratama/Mindstack.git
@@ -138,7 +145,9 @@ test/                # Vitest suites (plain Node)
 
 ## ☁️ Deployment
 
-**Vercel** — `npm run build` produces the expected layout: static client in `dist/`, the Hono
+**Vercel** — the production instance runs at
+[themindstack.vercel.app](https://themindstack.vercel.app). `npm run build` produces the
+expected layout: static client in `dist/`, the Hono
 app bundled to `api/index.js`, routed by [vercel.json](vercel.json).
 
 **Self-hosted** — a [Dockerfile](Dockerfile) is included; or run the Node server directly:
@@ -161,6 +170,34 @@ the file that owns the rationale. Highlights:
 
 UI provenance for vendored material is in [docs/design/](docs/design/). Never file UI material
 in `docs/knowledge/` or `docs/sources/` — that's the report generator's prompt pipeline.
+
+## 🙏 Attribution
+
+Mindstack stands on other people's work, and the knowledge base tags every claim by where it
+came from (see the epistemic-tier legend in
+[docs/knowledge/00-overview.md](docs/knowledge/00-overview.md)).
+
+**Content & theory**
+
+- [Sakinorva](https://sakinorva.net/functions) — the cognitive-function test whose eight scores
+  are Mindstack's only input. Mindstack is not affiliated with Sakinorva.
+- [mbti-notes](https://mbti-notes.tumblr.com) — the type theory, fundamentals, development, and
+  type-spotting guides that seed the interpretive knowledge base
+  ([docs/sources/](docs/sources/)). Attributed in reports as community-derived and unvalidated.
+- Naomi Quenk — the "grip" concept, which Mindstack generalizes (and flags as its own
+  speculative extension) from fixed inferior functions to measured profile shapes.
+- Claims tagged as established science cite the underlying research directly (Fleeson;
+  Fleeson & Jayawickreme; Mischel & Shoda; McCrae & Costa; Reynierse; Forer; and others —
+  full list in [docs/knowledge/00-overview.md](docs/knowledge/00-overview.md)).
+
+**Design**
+
+- [shadcn/ui](https://ui.shadcn.com) (MIT) — the color palette is shadcn/ui's neutral theme in
+  oklch, kept diffable against upstream ([docs/design/shadcn.md](docs/design/shadcn.md)).
+- [transitions.dev](https://transitions.dev) by Jakub Antalik — seven motion snippets vendored
+  from the `transitions-pro` npm package (MIT), with deviations recorded in
+  [docs/design/transitions-dev.md](docs/design/transitions-dev.md).
+- Emil Kowalski's essay *You don't need animations* — the motion budget the UI is held to.
 
 ---
 
