@@ -128,6 +128,24 @@ export function createInputForm(onSubmit: () => void): InputFormApi {
     ),
   );
 
+  /*
+   * Step 0, above the fields and below the sub that names the source. Most
+   * people arrive without scores in hand, and an unexplained eight-field form
+   * reads as "you should already know these".
+   *
+   * target="_blank" with rel="noopener": the test is a long questionnaire, so
+   * the tab keeps this page - and anything already typed - intact behind it.
+   */
+  const testFirst = el('p', 'test-first');
+  const testLink = el('a', undefined, 'Take the Sakinorva cognitive-functions test');
+  attrs(testLink, {
+    href: 'https://sakinorva.net/functions',
+    target: '_blank',
+    rel: 'noopener',
+  });
+  testFirst.append('Don’t have your scores yet? ', testLink, ' first, then copy the eight results here.');
+  panel.appendChild(testFirst);
+
   const scoreInputs = new Map<FunctionKey, HTMLInputElement>();
   const fieldWraps = new Map<FunctionKey, HTMLElement>();
   /** No report exists before the first collapse, so nothing can be stale yet. */

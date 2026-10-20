@@ -17016,6 +17016,51 @@ function createPreludeSplitter(headings) {
   };
 }
 
+// src/server/gemini-thoughts.ts
+var OPEN = "<thought>";
+var CLOSE = "</thought>";
+function heldPrefixLen(s, m) {
+  const max = Math.min(s.length, m.length - 1);
+  for (let k = max; k > 0; k -= 1) {
+    if (s.slice(s.length - k) === m.slice(0, k)) return k;
+  }
+  return 0;
+}
+function createThoughtUnwrapper() {
+  let inThought = false;
+  let held = "";
+  const marker = () => inThought ? CLOSE : OPEN;
+  const kind = () => inThought ? "thinking" : "content";
+  return {
+    push(delta) {
+      const items = [];
+      let text = held + delta;
+      held = "";
+      for (; ; ) {
+        const m = marker();
+        const idx = text.indexOf(m);
+        if (idx === -1) {
+          const hold = heldPrefixLen(text, m);
+          const body2 = text.slice(0, text.length - hold);
+          if (body2 !== "") items.push({ kind: kind(), text: body2 });
+          held = text.slice(text.length - hold);
+          return items;
+        }
+        const body = text.slice(0, idx);
+        if (body !== "") items.push({ kind: kind(), text: body });
+        text = text.slice(idx + m.length);
+        inThought = !inThought;
+      }
+    },
+    flush() {
+      if (held === "") return [];
+      const tail = held;
+      held = "";
+      return [{ kind: kind(), text: tail }];
+    }
+  };
+}
+
 // src/server/deepseek.ts
 var DEFAULT_MODEL = "deepseek-v4-flash";
 var DEFAULT_BASE_URL = "https://api.deepseek.com";
@@ -17156,7 +17201,7 @@ function buildChatRequest(input) {
     return { ...common, reasoning };
   }
   if (input.kind === "gemini") {
-    const thinkingConfig = !thinkingOn ? { thinking_level: GEMINI_MIN_THINKING_LEVEL, include_thoughts: false } : effort !== null ? { thinking_level: effort === "max" ? "high" : effort, include_thoughts: true } : null;
+    const thinkingConfig = !thinkingOn ? { thinking_level: GEMINI_MIN_THINKING_LEVEL, include_thoughts: true } : effort !== null ? { thinking_level: effort === "max" ? "high" : effort, include_thoughts: true } : null;
     return {
       ...common,
       ...thinkingConfig ? { extra_body: { google: { thinking_config: thinkingConfig } } } : {}
@@ -17240,6 +17285,17 @@ async function* streamOneProvider(request, provider) {
     let reasoningChars = 0;
     let finishReason = null;
     const splitter = prompted ? createPreludeSplitter(request.reportHeadings) : null;
+    const thoughts = provider.kind === "gemini" ? createThoughtUnwrapper() : null;
+    const routeSegments = (segments) => {
+      const out = [];
+      for (const seg of segments) {
+        if (seg.kind === "thinking") out.push(seg);
+        else if (splitter) out.push(...splitter.push(seg.text));
+        else out.push(seg);
+      }
+      return out;
+    };
+    const processContent = (raw2) => routeSegments(thoughts ? thoughts.push(raw2) : [{ kind: "content", text: raw2 }]);
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), TIMEOUT_MS);
     const signal = composeSignals(timeout.signal, request.signal);
@@ -17275,8 +17331,7 @@ async function* streamOneProvider(request, provider) {
         }
         const delta = choice.delta?.content;
         if (typeof delta === "string" && delta.length > 0) {
-          const pieces = splitter ? splitter.push(delta) : [{ kind: "content", text: delta }];
-          for (const item of pieces) {
+          for (const item of processContent(delta)) {
             if (item.kind === "content") contentChars += item.text.length;
             else reasoningChars += item.text.length;
             yielded = true;
@@ -17288,8 +17343,11 @@ async function* streamOneProvider(request, provider) {
           }
         }
       }
-      if (runaway === null && splitter) {
-        for (const item of splitter.flush()) {
+      if (runaway === null) {
+        const tail = [];
+        if (thoughts) tail.push(...routeSegments(thoughts.flush()));
+        if (splitter) tail.push(...splitter.flush());
+        for (const item of tail) {
           if (item.kind === "content") contentChars += item.text.length;
           else reasoningChars += item.text.length;
           yielded = true;
